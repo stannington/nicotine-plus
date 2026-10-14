@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-FileCopyrightText: 2026 Nicotine+ Contributors
+  SPDX-License-Identifier: GPL-3.0-or-later
+-->
+<interface>
+  <requires lib="gtk+" version="3.0"/>
+  <object class="GtkBox" id="container">
+    <property name="orientation">vertical</property>
+    <property name="vexpand">True</property>
+    <property name="visible">True</property>
+    <child>
+      <object class="GtkLabel" id="placeholder_label">
+        <property name="hexpand">True</property>
+        <property name="label" translatable="yes">Coming soon</property>
+        <property name="vexpand">True</property>
+        <property name="visible">True</property>
+        <style>
+          <class name="dim-label"/>
+        </style>
+      </object>
+    </child>
+  </object>
+</interface>

@@ -374,7 +374,8 @@ class Config:
                     "userinfo": True,
                     "private": True,
                     "chatrooms": True,
-                    "interests": True
+                    "interests": True,
+                    "discogs": True
                 },
                 "modes_order": [
                     "search",
@@ -385,7 +386,8 @@ class Config:
                     "private",
                     "userlist",
                     "chatrooms",
-                    "interests"
+                    "interests",
+                    "discogs"
                 ],
                 "buddylistinchatrooms": "tab",
                 "trayicon": True,

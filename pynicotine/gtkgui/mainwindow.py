@@ -24,6 +24,7 @@ from pynicotine.gtkgui.application import GTK_API_VERSION
 from pynicotine.gtkgui.application import GTK_MINOR_VERSION
 from pynicotine.gtkgui.buddies import Buddies
 from pynicotine.gtkgui.chatrooms import ChatRooms
+from pynicotine.gtkgui.discogs import Discogs
 from pynicotine.gtkgui.downloads import Downloads
 from pynicotine.gtkgui.interests import Interests
 from pynicotine.gtkgui.privatechat import PrivateChats
@@ -81,6 +82,11 @@ class MainWindow(Window):
             self.connections_label,
             self.container,
             self.content,
+            self.discogs_container,
+            self.discogs_end,
+            self.discogs_page,
+            self.discogs_title,
+            self.discogs_toolbar,
             self.download_files_label,
             self.download_status_button,
             self.download_status_label,
@@ -271,9 +277,11 @@ class MainWindow(Window):
         self.privatechat = PrivateChats(self)
         self.userinfo = UserInfos(self)
         self.userbrowse = UserBrowses(self)
+        self.discogs = Discogs(self)
 
         self.tabs = {
             "chatrooms": self.chatrooms,
+            "discogs": self.discogs,
             "downloads": self.downloads,
             "interests": self.interests,
             "private": self.privatechat,
@@ -787,7 +795,8 @@ class MainWindow(Window):
             ("private", _("Private Chat"), "mail-unread-symbolic"),
             ("userlist", _("Buddies"), "system-users-symbolic"),
             ("chatrooms", _("Chat Rooms"), "user-available-symbolic"),
-            ("interests", _("Interests"), "emblem-default-symbolic")
+            ("interests", _("Interests"), "emblem-default-symbolic"),
+            ("discogs", "Discogs", "folder-music-symbolic")
         ):
             tab = self.tabs[tab_id]
             self.notebook.append_page(tab.page, tab_text, focus_callback=tab.on_focus)
