@@ -79,6 +79,24 @@
               </object>
             </child>
             <child>
+              <object class="GtkButton" id="token_button">
+                <property name="tooltip-text" translatable="yes">Discogs Personal Access Token</property>
+                <property name="valign">center</property>
+                <property name="visible">True</property>
+                <signal name="clicked" handler="on_set_token"/>
+                <child>
+                  <object class="GtkImage">
+                    <property name="icon-name">dialog-password-symbolic</property>
+                    <property name="visible">True</property>
+                  </object>
+                </child>
+                <style>
+                  <class name="circular"/>
+                  <class name="image-button"/>
+                </style>
+              </object>
+            </child>
+            <child>
               <object class="GtkButton" id="library_folders_button">
                 <property name="tooltip-text" translatable="yes">Choose Library Folders</property>
                 <property name="valign">center</property>

@@ -8,6 +8,7 @@ from pynicotine.core import core
 from pynicotine.events import events
 from pynicotine.gtkgui.application import GTK_API_VERSION
 from pynicotine.gtkgui.widgets import ui
+from pynicotine.gtkgui.widgets.dialogs import EntryDialog
 from pynicotine.gtkgui.widgets.filechooser import FolderChooser
 from pynicotine.gtkgui.widgets.popupmenu import PopupMenu
 from pynicotine.gtkgui.widgets.treeview import TreeView
@@ -28,7 +29,8 @@ class Discogs:
             self.releases_list_container,
             self.rescan_library_button,
             self.search_entry,
-            self.status_label
+            self.status_label,
+            self.token_button
         ) = ui.load(scope=self, path="discogs.ui")
 
         if GTK_API_VERSION >= 4:
@@ -359,6 +361,28 @@ class Discogs:
 
     def on_rescan_library(self, *_args):
         self.scan_library()
+
+    def on_set_token(self, *_args):
+
+        EntryDialog(
+            application=self.window.application,
+            title=_("Discogs Personal Access Token"),
+            message=_("A token lets you make more Discogs requests per minute. Generate one in your Discogs "
+                      "account under Settings → Developers. Leave empty to remove the token."),
+            default=config.sections["discogs"]["token"],
+            visibility=False,
+            action_button_label=_("_Save"),
+            callback=self.on_token_response
+        ).present()
+
+    def on_token_response(self, dialog, _response_id, _data):
+
+        if not self.__dict__:
+            # Tab was closed
+            return
+
+        config.sections["discogs"]["token"] = dialog.get_entry_value().strip()
+        config.write_configuration()
 
     def on_search_release(self, *_args):
 
