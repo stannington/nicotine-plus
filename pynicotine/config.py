@@ -409,7 +409,8 @@ class Config:
                 "protocols": {}
             },
             "discogs": {
-                "token": ""
+                "token": "",
+                "library_folders": []
             },
             "interests": {
                 "likes": [],

@@ -95,6 +95,7 @@ EVENT_NAMES = {
     # Discogs
     "discogs-label-releases",
     "discogs-label-search",
+    "discogs-library-updated",
 
     # Interests
     "add-dislike",

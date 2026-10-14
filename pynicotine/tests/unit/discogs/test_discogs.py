@@ -13,11 +13,20 @@ from urllib.parse import urlsplit
 
 from pynicotine.config import config
 from pynicotine.core import core
+from pynicotine.discogs import LibraryIndex
 
 CURRENT_FOLDER_PATH = os.path.dirname(os.path.realpath(__file__))
 DATA_FOLDER_PATH = os.path.join(CURRENT_FOLDER_PATH, "temp_data")
 LABEL_SEARCH_FILE_PATH = os.path.join(CURRENT_FOLDER_PATH, "label_search.json")
 LABEL_RELEASES_FILE_PATH = os.path.join(CURRENT_FOLDER_PATH, "label_releases.json")
+LIBRARY_FOLDER_PATHS = (
+    "Labels/! Example Recordings/1 Singles/[EXR 042] Test Artist - Night Signals EP (2024) [WEB-FLAC]",
+    "Labels/! Example Recordings/1 Singles/2023 another_artist-dubplate_pressure-exr041-web",
+    "Labels/! Example Recordings/2 Albums/2020-04-10 Test Artist - Long Player (EXRCD017)",
+    "Labels/! Example Recordings/2 Albums/2020-04-10 Test Artist - Long Player (EXRCD017)/CD1",
+    "Labels/! Example Recordings/1 Singles/Example Recordings - (2025) Thirty Years Of Examples - Part 1",
+    "Labels/! Example Recordings/1 Singles/Test Artist - Series - Part 1"
+)
 
 
 def read_response(file_path):
@@ -166,3 +175,110 @@ class DiscogsTest(TestCase):
         ):
             with self.subTest(artist=artist, title=title):
                 self.assertEqual(core.discogs.get_search_term(artist, title), search_term)
+
+
+class LibraryIndexTest(TestCase):
+
+    def setUp(self):
+
+        self.library = LibraryIndex()
+
+        for folder_path in LIBRARY_FOLDER_PATHS:
+            self.library.add_folder(folder_path)
+
+    def test_find_release(self):
+
+        for (artist, title, catno), folder_index in (
+            # Catalogue number, written with a space, a dash or in lowercase in the folder name
+            (("Test Artist (2)", "Night Signals EP", "EXR042"), 0),
+            (("Another Artist", "Dubplate Pressure", "EXR041"), 1),
+            (("Another Artist", "Unrelated Title", "XYZ1, EXR041"), 1),
+
+            # Artist and title words, when the catalogue number differs
+            (("Test Artist", "Long Player", "EXRLP017"), 2),
+
+            # Distinctive title alone, when the folder names the label instead of the artists
+            (("Artist One, Artist Two", "Thirty Years Of Examples - Part 1", "EXR30VIP001"), 4),
+
+            # Numbers must match, so Part 2 is not mistaken for Part 1
+            (("Test Artist", "Series - Part 2", "none"), None),
+
+            # Short catalogue numbers like "CD1" are too ambiguous
+            (("Someone Else", "Something", "CD1"), None),
+
+            # Too few words for a reliable match
+            (("Various", "Long", ""), None)
+        ):
+            with self.subTest(artist=artist, title=title, catno=catno):
+                expected_path = LIBRARY_FOLDER_PATHS[folder_index] if folder_index is not None else None
+                self.assertEqual(self.library.find_release(artist, title, catno), expected_path)
+
+
+class LibraryScanTest(TestCase):
+
+    def setUp(self):
+
+        config.set_data_folder(DATA_FOLDER_PATH)
+        config.set_config_file(os.path.join(DATA_FOLDER_PATH, "temp_config"))
+
+        core.init_components(enabled_components={"discogs"})
+        core.start()
+
+        self.library_path = os.path.join(DATA_FOLDER_PATH, "library")
+
+        for folder_path in LIBRARY_FOLDER_PATHS:
+            os.makedirs(os.path.join(self.library_path, folder_path), exist_ok=True)
+
+        config.sections["discogs"]["library_folders"] = [self.library_path]
+        config.sections["transfers"]["downloaddir"] = os.path.join(DATA_FOLDER_PATH, "downloads")
+
+    def tearDown(self):
+        core.quit()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(DATA_FOLDER_PATH, ignore_errors=True)
+
+    def test_scan_library(self):
+
+        # Run the scan on this thread, and the main thread callback directly
+        with patch("pynicotine.discogs.Discogs._start_thread") as mock_start_thread:
+            core.discogs.request_library_scan()
+
+        self.assertTrue(core.discogs.is_scanning_library)
+
+        target, folder_paths = mock_start_thread.call_args.args
+        self.assertEqual(folder_paths, [self.library_path, os.path.join(DATA_FOLDER_PATH, "downloads")])
+
+        with patch("pynicotine.events.Events.invoke_main_thread") as mock_invoke_main_thread:
+            target(folder_paths)
+
+        callback, library = mock_invoke_main_thread.call_args.args
+        callback(library)
+
+        self.assertFalse(core.discogs.is_scanning_library)
+        self.assertEqual(
+            core.discogs.find_in_library("Test Artist", "Night Signals EP", "EXR042"),
+            os.path.join(self.library_path, LIBRARY_FOLDER_PATHS[0])
+        )
+
+        # A finished download is added without a new scan
+        core.discogs._folder_download_finished(  # pylint: disable=protected-access
+            os.path.join(DATA_FOLDER_PATH, "downloads", "New Artist - Fresh Release (NEW001)"))
+
+        self.assertIsNotNone(core.discogs.find_in_library("New Artist", "Fresh Release", "NEW001"))
+
+    def test_rescan_while_scanning(self):
+        """Requesting a scan during a scan starts another one afterwards, so
+        that newly chosen folders are included."""
+
+        with patch("pynicotine.discogs.Discogs._start_thread") as mock_start_thread:
+            core.discogs.request_library_scan()
+            core.discogs.request_library_scan()
+
+            self.assertEqual(mock_start_thread.call_count, 1)
+
+            core.discogs._library_scanned(LibraryIndex())  # pylint: disable=protected-access
+
+            self.assertEqual(mock_start_thread.call_count, 2)
+            self.assertTrue(core.discogs.is_scanning_library)

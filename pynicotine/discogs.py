@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import json
+import os
 import re
 import threading
 
@@ -36,6 +37,119 @@ class DiscogsRelease:
         self.release_format = release_format
 
 
+class LibraryIndex:
+    """Folder names in the music library, indexed so that a Discogs release
+    can be matched by catalogue number, or else by artist and title words."""
+
+    __slots__ = ("folder_paths", "_catnos", "_words")
+
+    WORD_PATTERN = re.compile(r"[^\W_]+")  # Letters and digits, split on anything else
+    MAX_CATNO_WORDS = 3                    # "METH 056" is split into two words
+    MIN_CATNO_LENGTH = 4                   # Shorter ones, e.g. "CD1", are too ambiguous
+    MIN_SIGNIFICANT_WORDS = 2
+    MIN_SIGNIFICANT_TITLE_WORDS = 3
+    IGNORED_WORDS = {"the", "and", "various", "artists", "vol", "vip", "mix", "remix", "edit", "dub",
+                     "ep", "lp", "cd", "web", "flac", "mp3", "wav", "vinyl"}
+
+    def __init__(self):
+        self.folder_paths = []
+        self._catnos = {}
+        self._words = {}
+
+    @classmethod
+    def get_words(cls, text):
+        return cls.WORD_PATTERN.findall(text.lower())
+
+    @staticmethod
+    def _is_catno(text):
+        return any(char.isdigit() for char in text) and any(char.isalpha() for char in text)
+
+    def add_folder(self, folder_path):
+
+        folder_index = len(self.folder_paths)
+        folder_name = folder_path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        words = self.get_words(folder_name)
+
+        self.folder_paths.append(folder_path)
+
+        for word in words:
+            self._words.setdefault(word, set()).add(folder_index)
+
+        # Catalogue numbers can be written with separators, e.g. "META 066" or
+        # "meta-066", so also join neighbouring words
+        for start_index in range(len(words)):
+            for end_index in range(start_index + 1, min(start_index + self.MAX_CATNO_WORDS, len(words)) + 1):
+                catno = "".join(words[start_index:end_index])
+
+                if self._is_catno(catno):
+                    self._catnos.setdefault(catno, folder_index)
+
+    def find_release(self, artist, title, catno):
+        """Return the path of a folder that likely contains the release, or
+        None."""
+
+        # Discogs separates multiple catalogue numbers with commas
+        for single_catno in catno.split(","):
+            single_catno = "".join(self.get_words(single_catno))
+
+            if len(single_catno) < self.MIN_CATNO_LENGTH or not self._is_catno(single_catno):
+                # Not a usable catalogue number, e.g. "none"
+                continue
+
+            folder_index = self._catnos.get(single_catno)
+
+            if folder_index is not None:
+                return self.folder_paths[folder_index]
+
+        # No catalogue number match, look for a folder containing all words of
+        # the artist and title. Folders sometimes name the label instead of the
+        # artists, so also try the title alone if it's distinctive enough.
+        artist = Discogs.ARTIST_NUMBER_PATTERN.sub("", artist)
+
+        for words, min_words in (
+            (self._get_significant_words(f"{artist} {title}"), self.MIN_SIGNIFICANT_WORDS),
+            (self._get_significant_words(title), self.MIN_SIGNIFICANT_TITLE_WORDS)
+        ):
+            if len(words) < min_words:
+                # Too few words for a reliable match
+                continue
+
+            folder_index = self._find_folder_with_words(words)
+
+            if folder_index is not None:
+                return self.folder_paths[folder_index]
+
+        return None
+
+    def _get_significant_words(self, text):
+        return {
+            word for word in self.get_words(text)
+            # Keep short numbers, so that e.g. "Part 4" doesn't match "Part 1"
+            if (len(word) >= 3 or word.isdigit()) and word not in self.IGNORED_WORDS
+        }
+
+    def _find_folder_with_words(self, words):
+
+        folder_indexes = None
+
+        # Start with the rarest word, to keep the intersections small
+        for word in sorted(words, key=lambda word: len(self._words.get(word, ()))):
+            word_folder_indexes = self._words.get(word)
+
+            if not word_folder_indexes:
+                return None
+
+            if folder_indexes is None:
+                folder_indexes = set(word_folder_indexes)
+            else:
+                folder_indexes &= word_folder_indexes
+
+            if not folder_indexes:
+                return None
+
+        return min(folder_indexes)
+
+
 class Discogs:
     """Looks up record labels and their releases using the Discogs API.
 
@@ -45,7 +159,7 @@ class Discogs:
     a personal access token).
     """
 
-    __slots__ = ()
+    __slots__ = ("library", "is_scanning_library", "_should_rescan_library")
 
     API_URL = "https://api.discogs.com"
     MAX_LABEL_RESULTS = 50
@@ -62,6 +176,90 @@ class Discogs:
         flags=re.IGNORECASE
     )
     VARIOUS_ARTISTS = {"various", "various artists"}
+
+    def __init__(self):
+
+        self.library = None
+        self.is_scanning_library = False
+        self._should_rescan_library = False
+
+        events.connect("folder-download-finished", self._folder_download_finished)
+
+    def _folder_download_finished(self, folder_path):
+
+        if self.library is None:
+            return
+
+        self.library.add_folder(folder_path)
+        events.emit("discogs-library-updated")
+
+    def get_library_folders(self):
+        """Folders to scan: the chosen library folders and the download
+        folder."""
+
+        folder_paths = []
+        download_folder_path = config.sections["transfers"]["downloaddir"]
+
+        for folder_path in (*config.sections["discogs"]["library_folders"], download_folder_path):
+            if not folder_path:
+                continue
+
+            # The download folder can contain variables, e.g. ${NICOTINE_DATA_HOME}
+            folder_path = os.path.normpath(os.path.expandvars(folder_path))
+
+            if folder_path not in folder_paths:
+                folder_paths.append(folder_path)
+
+        return folder_paths
+
+    def request_library_scan(self):
+        """Scan the library folders for release folders in the background.
+        Emits "discogs-library-updated" when done."""
+
+        if self.is_scanning_library:
+            # Folders may have changed, scan again when the current scan is done
+            self._should_rescan_library = True
+            return
+
+        self.is_scanning_library = True
+        self._start_thread(self._scan_library, self.get_library_folders())
+
+    def _scan_library(self, folder_paths):
+
+        library = LibraryIndex()
+
+        for folder_path in folder_paths:
+            for current_path, folder_names, _file_names in os.walk(folder_path, onerror=self._scan_error):
+                folder_names.sort()
+
+                for folder_name in folder_names:
+                    library.add_folder(os.path.join(current_path, folder_name))
+
+        events.invoke_main_thread(self._library_scanned, library)
+
+    @staticmethod
+    def _scan_error(error):
+        log.add_debug("Unable to scan Discogs library folder: %s", error)
+
+    def _library_scanned(self, library):
+
+        self.library = library
+        self.is_scanning_library = False
+
+        if self._should_rescan_library:
+            self._should_rescan_library = False
+            self.request_library_scan()
+
+        events.emit("discogs-library-updated")
+
+    def find_in_library(self, artist, title, catno):
+        """Return the path of the library folder that likely contains the
+        release, or None if not found or the library is not scanned yet."""
+
+        if self.library is None:
+            return None
+
+        return self.library.find_release(artist, title, catno)
 
     def request_label_search(self, query):
         """Search for labels matching the query. Emits "discogs-label-search"

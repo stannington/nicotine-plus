@@ -3,10 +3,12 @@
 
 from gi.repository import GObject
 
+from pynicotine.config import config
 from pynicotine.core import core
 from pynicotine.events import events
 from pynicotine.gtkgui.application import GTK_API_VERSION
 from pynicotine.gtkgui.widgets import ui
+from pynicotine.gtkgui.widgets.filechooser import FolderChooser
 from pynicotine.gtkgui.widgets.popupmenu import PopupMenu
 from pynicotine.gtkgui.widgets.treeview import TreeView
 from pynicotine.utils import humanize
@@ -19,9 +21,12 @@ class Discogs:
         (
             self.container,
             self.labels_list_container,
+            self.library_folders_button,
+            self.library_label,
             self.load_more_button,
             self.releases_label,
             self.releases_list_container,
+            self.rescan_library_button,
             self.search_entry,
             self.status_label
         ) = ui.load(scope=self, path="discogs.ui")
@@ -67,6 +72,13 @@ class Discogs:
             activate_row_callback=self.on_search_release,
             columns={
                 # Visible columns
+                "in_library": {
+                    "column_type": "icon",
+                    "title": _("In Library"),
+                    "width": 25,
+                    "hide_header": True,
+                    "tooltip_callback": self.on_library_tooltip
+                },
                 "year": {
                     "column_type": "number",
                     "title": _("Year"),
@@ -100,7 +112,8 @@ class Discogs:
                 # Hidden data columns
                 "id_data": {"data_type": GObject.TYPE_UINT64, "iterator_key": True},
                 "year_data": {"data_type": GObject.TYPE_UINT},
-                "order_data": {"data_type": GObject.TYPE_UINT, "default_sort_type": "ascending"}
+                "order_data": {"data_type": GObject.TYPE_UINT, "default_sort_type": "ascending"},
+                "library_path_data": {"data_type": GObject.TYPE_STRING}
             }
         )
 
@@ -111,7 +124,8 @@ class Discogs:
 
         for event_name, callback in (
             ("discogs-label-releases", self.label_releases),
-            ("discogs-label-search", self.label_search)
+            ("discogs-label-search", self.label_search),
+            ("discogs-library-updated", self.library_updated)
         ):
             events.connect(event_name, callback)
 
@@ -125,8 +139,59 @@ class Discogs:
 
     def on_focus(self, *_args):
 
+        self.scan_library_if_needed()
         self.search_entry.grab_focus()
         return True
+
+    def scan_library_if_needed(self):
+
+        # Scan when the tab is first used, rather than at startup, since it can
+        # take a while
+        if core.discogs.library is None and not core.discogs.is_scanning_library:
+            self.scan_library()
+
+    def scan_library(self):
+        core.discogs.request_library_scan()
+        self.update_library_status()
+
+    def update_library_status(self):
+
+        library = core.discogs.library
+
+        if core.discogs.is_scanning_library:
+            status = _("Scanning library…")
+
+        elif library is None:
+            status = _("Library not scanned")
+
+        else:
+            status = _("Library: %(num_folders)s folders") % {"num_folders": humanize(len(library.folder_paths))}
+
+        self.library_label.set_label(status)
+        self.library_label.set_tooltip_text("\n".join(core.discogs.get_library_folders()))
+        self.rescan_library_button.set_sensitive(not core.discogs.is_scanning_library)
+
+    def get_library_values(self, artist, title, catno):
+
+        library_path = core.discogs.find_in_library(artist, title, catno) or ""
+        icon_name = "object-select-symbolic" if library_path else ""
+
+        return icon_name, library_path
+
+    def library_updated(self):
+
+        for iterator in self.releases_list_view.iterators.values():
+            artist, title, catno = (
+                self.releases_list_view.get_row_value(iterator, column_id) for column_id in ("artist", "title", "catno")
+            )
+            self.releases_list_view.set_row_values(
+                iterator, ("in_library", "library_path_data"), self.get_library_values(artist, title, catno)
+            )
+
+        self.update_library_status()
+
+        if self.releases_list_view.iterators:
+            self.update_status()
 
     def request_releases(self, page_number):
 
@@ -139,6 +204,10 @@ class Discogs:
     def update_status(self):
 
         num_releases = len(self.releases_list_view.iterators)
+        num_in_library = sum(
+            1 for iterator in self.releases_list_view.iterators.values()
+            if self.releases_list_view.get_row_value(iterator, "library_path_data")
+        )
         has_more_pages = self.page_number < self.num_pages
 
         if not num_releases:
@@ -149,6 +218,9 @@ class Discogs:
 
         else:
             status = _("Showing all %(num_releases)s releases") % {"num_releases": humanize(num_releases)}
+
+        if num_in_library:
+            status += ", " + _("%(num_releases)s in your library") % {"num_releases": humanize(num_in_library)}
 
         self.status_label.set_label(status)
         self.load_more_button.set_label(_("Load More"))
@@ -196,8 +268,11 @@ class Discogs:
         self.releases_list_view.freeze()
 
         for index, release in enumerate(releases):
+            icon_name, library_path = self.get_library_values(release.artist, release.title, release.catno)
+
             # Releases that also appeared on an earlier page are skipped by add_row()
             self.releases_list_view.add_row([
+                icon_name,
                 str(release.year or ""),
                 release.artist,
                 release.title,
@@ -205,7 +280,8 @@ class Discogs:
                 release.release_format,
                 release.id,
                 release.year or 0,
-                first_order + index
+                first_order + index,
+                library_path
             ], select_row=False)
 
         self.releases_list_view.unfreeze()
@@ -227,6 +303,7 @@ class Discogs:
         self.status_label.set_label(_("Searching…"))
 
         core.discogs.request_label_search(query)
+        self.scan_library_if_needed()
 
     def on_select_label(self, list_view, iterator):
 
@@ -248,6 +325,37 @@ class Discogs:
 
     def on_load_more(self, *_args):
         self.request_releases(self.page_number + 1)
+
+    def on_library_tooltip(self, list_view, iterator):
+
+        library_path = list_view.get_row_value(iterator, "library_path_data")
+
+        if not library_path:
+            return None
+
+        return _("In library: %(path)s") % {"path": library_path}
+
+    def on_choose_library_folders(self, *_args):
+
+        library_folders = config.sections["discogs"]["library_folders"]
+
+        FolderChooser(
+            application=self.window.application,
+            title=_("Select Library Folders"),
+            callback=self.on_library_folders_selected,
+            initial_folder=library_folders[0] if library_folders else None,
+            select_multiple=True
+        ).present()
+
+    def on_library_folders_selected(self, selected_folder_paths, _data):
+
+        config.sections["discogs"]["library_folders"] = list(selected_folder_paths)
+        config.write_configuration()
+
+        self.scan_library()
+
+    def on_rescan_library(self, *_args):
+        self.scan_library()
 
     def on_search_release(self, *_args):
 
