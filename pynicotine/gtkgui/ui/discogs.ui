@@ -5,19 +5,123 @@
 -->
 <interface>
   <requires lib="gtk+" version="3.0"/>
+  <object class="GtkSizeGroup">
+    <property name="mode">vertical</property>
+    <widgets>
+      <widget name="_labels_heading"/>
+      <widget name="_releases_header"/>
+    </widgets>
+  </object>
   <object class="GtkBox" id="container">
-    <property name="orientation">vertical</property>
+    <property name="spacing">1</property>
     <property name="vexpand">True</property>
     <property name="visible">True</property>
     <child>
-      <object class="GtkLabel" id="placeholder_label">
-        <property name="hexpand">True</property>
-        <property name="label" translatable="yes">Coming soon</property>
-        <property name="vexpand">True</property>
+      <object class="GtkBox">
+        <property name="orientation">vertical</property>
         <property name="visible">True</property>
+        <property name="width-request">280</property>
+        <child>
+          <object class="GtkLabel" id="_labels_heading">
+            <property name="label" translatable="yes">Labels</property>
+            <property name="margin-end">12</property>
+            <property name="margin-start">12</property>
+            <property name="visible">True</property>
+            <property name="xalign">0</property>
+            <style>
+              <class name="heading"/>
+            </style>
+          </object>
+        </child>
+        <child>
+          <object class="GtkEntry" id="search_entry">
+            <property name="margin-bottom">12</property>
+            <property name="margin-end">6</property>
+            <property name="margin-start">6</property>
+            <property name="placeholder-text" translatable="yes">Search for a label…</property>
+            <property name="primary-icon-name">system-search-symbolic</property>
+            <property name="visible">True</property>
+            <property name="width-chars">15</property>
+            <signal name="activate" handler="on_search_labels"/>
+            <signal name="icon-press" handler="on_search_labels"/>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox">
+            <property name="vexpand">True</property>
+            <property name="visible">True</property>
+            <child>
+              <object class="GtkScrolledWindow" id="labels_list_container">
+                <property name="hexpand">True</property>
+                <property name="visible">True</property>
+              </object>
+            </child>
+          </object>
+        </child>
         <style>
-          <class name="dim-label"/>
+          <class name="border-end"/>
         </style>
+      </object>
+    </child>
+    <child>
+      <object class="GtkBox">
+        <property name="hexpand">True</property>
+        <property name="orientation">vertical</property>
+        <property name="visible">True</property>
+        <child>
+          <object class="GtkBox" id="_releases_header">
+            <property name="margin-bottom">6</property>
+            <property name="margin-end">6</property>
+            <property name="margin-start">6</property>
+            <property name="margin-top">6</property>
+            <property name="spacing">12</property>
+            <property name="visible">True</property>
+            <child>
+              <object class="GtkLabel" id="releases_label">
+                <property name="ellipsize">end</property>
+                <property name="label" translatable="yes">Releases</property>
+                <property name="margin-start">6</property>
+                <property name="visible">True</property>
+                <property name="xalign">0</property>
+                <style>
+                  <class name="heading"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkLabel" id="status_label">
+                <property name="ellipsize">end</property>
+                <property name="hexpand">True</property>
+                <property name="label" translatable="yes">Search for a label, then select it to see its releases</property>
+                <property name="visible">True</property>
+                <property name="xalign">0</property>
+                <style>
+                  <class name="dim-label"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="load_more_button">
+                <property name="label" translatable="yes">Load More</property>
+                <property name="valign">center</property>
+                <property name="visible">False</property>
+                <signal name="clicked" handler="on_load_more"/>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox">
+            <property name="vexpand">True</property>
+            <property name="visible">True</property>
+            <child>
+              <object class="GtkScrolledWindow" id="releases_list_container">
+                <property name="hexpand">True</property>
+                <property name="visible">True</property>
+              </object>
+            </child>
+          </object>
+        </child>
       </object>
     </child>
   </object>
