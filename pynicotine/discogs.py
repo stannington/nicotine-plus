@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import json
+import re
 import threading
 
 from urllib.parse import quote
@@ -51,6 +52,17 @@ class Discogs:
     RELEASES_PER_PAGE = 100  # Maximum allowed by Discogs
     TIMEOUT = 10
 
+    # Number Discogs adds to tell apart artists with the same name, e.g. "Calibre (2)"
+    ARTIST_NUMBER_PATTERN = re.compile(r"\s*\(\d+\)")
+
+    # Edition notes in titles, e.g. "(2025 Remastered)" or "[Deluxe Edition]"
+    EDITION_NOTE_PATTERN = re.compile(
+        r"\s*[(\[][^)\]]*\b(?:remaster|remastered|reissue|repress|deluxe|expanded|anniversary|edition)\b"
+        r"[^)\]]*[)\]]",
+        flags=re.IGNORECASE
+    )
+    VARIOUS_ARTISTS = {"various", "various artists"}
+
     def request_label_search(self, query):
         """Search for labels matching the query. Emits "discogs-label-search"
         with the query, a list of DiscogsLabel and an error message (or None).
@@ -70,6 +82,22 @@ class Discogs:
         """
 
         self._start_thread(self._label_releases, label_id, page, self._get_token())
+
+    def get_search_term(self, artist, title):
+        """Create a Soulseek search term for a release, without the extra
+        details in Discogs names that make searches find fewer results."""
+
+        artist = self.ARTIST_NUMBER_PATTERN.sub("", artist)
+        title = self.EDITION_NOTE_PATTERN.sub("", title)
+
+        if artist.strip().lower() in self.VARIOUS_ARTISTS:
+            artist = ""
+
+        # Discogs marks alternative artist names with "*". Soulseek also treats
+        # quotes, and "-" and "*" at the start of words, as search syntax.
+        words = f"{artist} {title}".replace("*", " ").replace('"', " ").split()
+
+        return " ".join(word.lstrip("-") for word in words if word.lstrip("-"))
 
     @staticmethod
     def _get_token():

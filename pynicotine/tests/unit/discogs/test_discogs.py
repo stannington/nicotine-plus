@@ -150,3 +150,19 @@ class DiscogsTest(TestCase):
         self.assertEqual(event_name, "discogs-label-releases")
         self.assertEqual((label_id, page, num_pages, releases), (1001, 1, 0, []))
         self.assertIn("429", error_message)
+
+    def test_get_search_term(self, _mock_urlopen):
+
+        for (artist, title), search_term in (
+            (("Test Artist (2)", "Night Signals EP"), "Test Artist Night Signals EP"),
+            (("Immerse (2), Philth (4), Ant TC1*", "Dark '97 / The Eastern"),
+             "Immerse, Philth, Ant TC1 Dark '97 / The Eastern"),
+            (("Rufige Kru", "Terminator EP (2025 Remastered)"), "Rufige Kru Terminator EP"),
+            (("Another Artist", "First Light [Deluxe Edition] (Remaster)"), "Another Artist First Light"),
+            (("Various", "Compilation Vol. 1"), "Compilation Vol. 1"),
+            (("Various Artists", "Compilation Vol. 2"), "Compilation Vol. 2"),
+            (("Test Artist", "Track (Original Mix)"), "Test Artist Track (Original Mix)"),
+            (("Test Artist", 'Side A - "Quoted" -ism *star'), "Test Artist Side A Quoted ism star")
+        ):
+            with self.subTest(artist=artist, title=title):
+                self.assertEqual(core.discogs.get_search_term(artist, title), search_term)

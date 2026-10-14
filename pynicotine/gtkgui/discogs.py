@@ -7,6 +7,7 @@ from pynicotine.core import core
 from pynicotine.events import events
 from pynicotine.gtkgui.application import GTK_API_VERSION
 from pynicotine.gtkgui.widgets import ui
+from pynicotine.gtkgui.widgets.popupmenu import PopupMenu
 from pynicotine.gtkgui.widgets.treeview import TreeView
 from pynicotine.utils import humanize
 
@@ -63,6 +64,7 @@ class Discogs:
 
         self.releases_list_view = TreeView(
             window, parent=self.releases_list_container,
+            activate_row_callback=self.on_search_release,
             columns={
                 # Visible columns
                 "year": {
@@ -102,6 +104,11 @@ class Discogs:
             }
         )
 
+        self.popup_menu = PopupMenu(self.window.application, self.releases_list_view.widget)
+        self.popup_menu.add_items(
+            ("#" + _("_Search for Release"), self.on_search_release)
+        )
+
         for event_name, callback in (
             ("discogs-label-releases", self.label_releases),
             ("discogs-label-search", self.label_search)
@@ -110,6 +117,7 @@ class Discogs:
 
     def destroy(self):
 
+        self.popup_menu.destroy()
         self.labels_list_view.destroy()
         self.releases_list_view.destroy()
 
@@ -240,3 +248,12 @@ class Discogs:
 
     def on_load_more(self, *_args):
         self.request_releases(self.page_number + 1)
+
+    def on_search_release(self, *_args):
+
+        for iterator in self.releases_list_view.get_selected_rows():
+            artist = self.releases_list_view.get_row_value(iterator, "artist")
+            title = self.releases_list_view.get_row_value(iterator, "title")
+
+            core.search.do_search(core.discogs.get_search_term(artist, title), mode="global")
+            return
