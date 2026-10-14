@@ -27,6 +27,7 @@ from pynicotine.slskmessages import ServerReconnect
 if TYPE_CHECKING:
     from pynicotine.buddies import Buddies
     from pynicotine.chatrooms import ChatRooms
+    from pynicotine.discogs import Discogs
     from pynicotine.downloads import Downloads
     from pynicotine.interests import Interests
     from pynicotine.networkfilter import NetworkFilter
@@ -56,7 +57,7 @@ class Core:
     __slots__ = ("shares", "users", "network_filter", "statistics", "search", "downloads",
                  "uploads", "interests", "userbrowse", "userinfo", "buddies", "privatechat",
                  "chatrooms", "pluginhandler", "now_playing", "portmapper", "notifications",
-                 "port_checker", "update_checker", "_network_thread", "cli_interface_address",
+                 "port_checker", "update_checker", "discogs", "_network_thread", "cli_interface_address",
                  "cli_listen_port", "cli_rescanning", "enabled_components")
 
     def __init__(self):
@@ -79,6 +80,7 @@ class Core:
         self.notifications: Notifications | None = None
         self.port_checker: PortChecker | None = None
         self.update_checker: UpdateChecker | None = None
+        self.discogs: Discogs | None = None
         self._network_thread: NetworkThread | None = None
 
         self.cli_interface_address: str | None = None
@@ -96,7 +98,7 @@ class Core:
                 "error_handler", "signal_handler", "cli", "portmapper", "network_thread", "shares", "users",
                 "notifications", "network_filter", "now_playing", "statistics", "port_checker", "update_checker",
                 "search", "downloads", "uploads", "interests", "userbrowse", "userinfo", "buddies",
-                "chatrooms", "privatechat", "pluginhandler"
+                "chatrooms", "privatechat", "discogs", "pluginhandler"
             }
 
         self.enabled_components = enabled_components
@@ -198,6 +200,10 @@ class Core:
         if "privatechat" in enabled_components:
             from pynicotine.privatechat import PrivateChat
             self.privatechat = PrivateChat()
+
+        if "discogs" in enabled_components:
+            from pynicotine.discogs import Discogs
+            self.discogs = Discogs()
 
         if "pluginhandler" in enabled_components:
             from pynicotine.pluginsystem import PluginHandler

@@ -408,6 +408,9 @@ class Config:
             "urls": {
                 "protocols": {}
             },
+            "discogs": {
+                "token": ""
+            },
             "interests": {
                 "likes": [],
                 "dislikes": []

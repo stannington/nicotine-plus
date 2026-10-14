@@ -1,0 +1,14 @@
+{
+  "pagination": {"page": 1, "pages": 3, "per_page": 100, "items": 203, "urls": {}},
+  "releases": [
+    {"status": "Accepted", "format": "12\", EP", "catno": "EXR042", "thumb": "",
+     "resource_url": "https://api.discogs.com/releases/9003", "title": "Night Signals EP", "id": 9003,
+     "year": 2024, "artist": "Test Artist (2)"},
+    {"status": "Accepted", "format": "File, FLAC, Single", "catno": "EXR041", "thumb": "",
+     "resource_url": "https://api.discogs.com/releases/9002", "title": "Dubplate Pressure", "id": 9002,
+     "year": 2023, "artist": "Another Artist"},
+    {"status": "Accepted", "format": "12\"", "catno": "EXR001, exr001", "thumb": "",
+     "resource_url": "https://api.discogs.com/releases/9001", "title": "First Light", "id": 9001,
+     "year": 0, "artist": "Various"}
+  ]
+}

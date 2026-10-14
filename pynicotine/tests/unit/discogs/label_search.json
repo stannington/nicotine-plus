@@ -1,0 +1,11 @@
+{
+  "pagination": {"page": 1, "pages": 1, "per_page": 50, "items": 2, "urls": {}},
+  "results": [
+    {"id": 1001, "type": "label", "master_id": null, "master_url": null, "uri": "/label/1001-Example-Recordings",
+     "title": "Example Recordings", "thumb": "", "cover_image": "",
+     "resource_url": "https://api.discogs.com/labels/1001"},
+    {"id": 1002, "type": "label", "master_id": null, "master_url": null, "uri": "/label/1002-Example-Recordings-Ltd",
+     "title": "Example Recordings Ltd.", "thumb": "", "cover_image": "",
+     "resource_url": "https://api.discogs.com/labels/1002"}
+  ]
+}

@@ -92,6 +92,10 @@ EVENT_NAMES = {
     "user-joined-room",
     "user-left-room",
 
+    # Discogs
+    "discogs-label-releases",
+    "discogs-label-search",
+
     # Interests
     "add-dislike",
     "add-interest",
