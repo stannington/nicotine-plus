@@ -157,12 +157,15 @@ class Discogs:
     def update_library_status(self):
 
         library = core.discogs.library
+        is_scanning = core.discogs.is_scanning_library
 
-        if core.discogs.is_scanning_library:
-            status = _("Scanning library…")
+        if library is None:
+            status = _("Scanning library…") if is_scanning else _("Library not scanned")
 
-        elif library is None:
-            status = _("Library not scanned")
+        elif is_scanning:
+            # Showing results from the previous scan until this one is done
+            status = _("Library: %(num_folders)s folders, updating…") % {
+                "num_folders": humanize(len(library.folder_paths))}
 
         else:
             status = _("Library: %(num_folders)s folders") % {"num_folders": humanize(len(library.folder_paths))}

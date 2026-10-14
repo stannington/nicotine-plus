@@ -176,6 +176,8 @@ class Discogs:
         flags=re.IGNORECASE
     )
     VARIOUS_ARTISTS = {"various", "various artists"}
+    LIBRARY_CACHE_FILE_NAME = "discogs_library.json"
+    LIBRARY_CACHE_VERSION = 1
 
     def __init__(self):
 
@@ -214,7 +216,12 @@ class Discogs:
 
     def request_library_scan(self):
         """Scan the library folders for release folders in the background.
-        Emits "discogs-library-updated" when done."""
+        Emits "discogs-library-updated" when done.
+
+        The first scan in a session also loads the results of the previous
+        scan from a cache file, so that releases can be ticked before the
+        slower scan finishes. That also emits "discogs-library-updated".
+        """
 
         if self.is_scanning_library:
             # Folders may have changed, scan again when the current scan is done
@@ -222,24 +229,86 @@ class Discogs:
             return
 
         self.is_scanning_library = True
-        self._start_thread(self._scan_library, self.get_library_folders())
+        self._start_thread(
+            self._scan_library, self.get_library_folders(),
+            os.path.join(config.data_folder_path, self.LIBRARY_CACHE_FILE_NAME), self.library is None
+        )
 
-    def _scan_library(self, folder_paths):
+    def _scan_library(self, library_folder_paths, cache_file_path, use_cache):
+
+        if use_cache:
+            library = self._load_library_cache(cache_file_path, library_folder_paths)
+
+            if library is not None:
+                events.invoke_main_thread(self._library_cache_loaded, library)
 
         library = LibraryIndex()
 
-        for folder_path in folder_paths:
-            for current_path, folder_names, _file_names in os.walk(folder_path, onerror=self._scan_error):
+        for library_folder_path in library_folder_paths:
+            for current_path, folder_names, _file_names in os.walk(library_folder_path, onerror=self._scan_error):
                 folder_names.sort()
 
                 for folder_name in folder_names:
                     library.add_folder(os.path.join(current_path, folder_name))
 
+        self._save_library_cache(cache_file_path, library_folder_paths, library)
         events.invoke_main_thread(self._library_scanned, library)
 
     @staticmethod
     def _scan_error(error):
         log.add_debug("Unable to scan Discogs library folder: %s", error)
+
+    def _load_library_cache(self, cache_file_path, library_folder_paths):
+
+        try:
+            with open(cache_file_path, encoding="utf-8") as file_handle:
+                cache = json.load(file_handle)
+
+        except FileNotFoundError:
+            return None
+
+        except (OSError, ValueError) as error:
+            log.add_debug("Unable to load Discogs library cache: %s", error)
+            return None
+
+        if (not isinstance(cache, dict) or cache.get("version") != self.LIBRARY_CACHE_VERSION
+                or cache.get("library_folders") != library_folder_paths):
+            # Outdated, or the library folders have changed since
+            return None
+
+        library = LibraryIndex()
+
+        for folder_path in cache.get("folder_paths", []):
+            library.add_folder(folder_path)
+
+        return library
+
+    def _save_library_cache(self, cache_file_path, library_folder_paths, library):
+
+        temp_file_path = f"{cache_file_path}.tmp"
+
+        try:
+            with open(temp_file_path, "w", encoding="utf-8") as file_handle:
+                json.dump({
+                    "version": self.LIBRARY_CACHE_VERSION,
+                    "library_folders": library_folder_paths,
+                    "folder_paths": library.folder_paths
+                }, file_handle)
+
+            # Replace the old file only once the new one is complete
+            os.replace(temp_file_path, cache_file_path)
+
+        except OSError as error:
+            log.add_debug("Unable to save Discogs library cache: %s", error)
+
+    def _library_cache_loaded(self, library):
+
+        if self.library is not None:
+            # The scan already finished
+            return
+
+        self.library = library
+        events.emit("discogs-library-updated")
 
     def _library_scanned(self, library):
 

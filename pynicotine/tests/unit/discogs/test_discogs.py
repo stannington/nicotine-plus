@@ -241,20 +241,10 @@ class LibraryScanTest(TestCase):
 
     def test_scan_library(self):
 
-        # Run the scan on this thread, and the main thread callback directly
-        with patch("pynicotine.discogs.Discogs._start_thread") as mock_start_thread:
-            core.discogs.request_library_scan()
+        self.assertEqual(
+            core.discogs.get_library_folders(), [self.library_path, os.path.join(DATA_FOLDER_PATH, "downloads")])
 
-        self.assertTrue(core.discogs.is_scanning_library)
-
-        target, folder_paths = mock_start_thread.call_args.args
-        self.assertEqual(folder_paths, [self.library_path, os.path.join(DATA_FOLDER_PATH, "downloads")])
-
-        with patch("pynicotine.events.Events.invoke_main_thread") as mock_invoke_main_thread:
-            target(folder_paths)
-
-        callback, library = mock_invoke_main_thread.call_args.args
-        callback(library)
+        self.run_scan()
 
         self.assertFalse(core.discogs.is_scanning_library)
         self.assertEqual(
@@ -282,3 +272,55 @@ class LibraryScanTest(TestCase):
 
             self.assertEqual(mock_start_thread.call_count, 2)
             self.assertTrue(core.discogs.is_scanning_library)
+
+    def run_scan(self):
+        """Run a library scan on this thread, and return the libraries passed
+        to the main thread callbacks (from the cache, then from the scan)."""
+
+        with patch("pynicotine.discogs.Discogs._start_thread") as mock_start_thread:
+            core.discogs.request_library_scan()
+
+        target, *args = mock_start_thread.call_args.args
+
+        with patch("pynicotine.events.Events.invoke_main_thread") as mock_invoke_main_thread:
+            target(*args)
+
+        libraries = []
+
+        for call in mock_invoke_main_thread.call_args_list:
+            callback, library = call.args
+            callback(library)
+            libraries.append(library)
+
+        return libraries
+
+    def test_library_cache(self):
+
+        # pylint: disable=protected-access
+
+        # First session: no cache yet, only the scan result
+        self.assertEqual(len(self.run_scan()), 1)
+        num_folders = len(core.discogs.library.folder_paths)
+
+        # Next session: the cache is loaded first, then the scan replaces it
+        core.discogs.library = None
+        cached_library, scanned_library = self.run_scan()
+
+        self.assertEqual(cached_library.folder_paths, scanned_library.folder_paths)
+        self.assertEqual(len(cached_library.folder_paths), num_folders)
+        self.assertIs(core.discogs.library, scanned_library)
+
+        # The cache is ignored when the library folders have changed
+        core.discogs.library = None
+        config.sections["discogs"]["library_folders"] = [os.path.join(self.library_path, "Labels")]
+
+        self.assertEqual(len(self.run_scan()), 1)
+
+        # A broken cache file is ignored
+        cache_file_path = os.path.join(DATA_FOLDER_PATH, core.discogs.LIBRARY_CACHE_FILE_NAME)
+
+        with open(cache_file_path, "w", encoding="utf-8") as file_handle:
+            file_handle.write("{broken")
+
+        core.discogs.library = None
+        self.assertEqual(len(self.run_scan()), 1)
