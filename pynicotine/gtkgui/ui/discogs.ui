@@ -79,6 +79,24 @@
               </object>
             </child>
             <child>
+              <object class="GtkButton" id="folder_name_button">
+                <property name="tooltip-text" translatable="yes">Downloaded Folder Name</property>
+                <property name="valign">center</property>
+                <property name="visible">True</property>
+                <signal name="clicked" handler="on_set_folder_name"/>
+                <child>
+                  <object class="GtkImage">
+                    <property name="icon-name">document-edit-symbolic</property>
+                    <property name="visible">True</property>
+                  </object>
+                </child>
+                <style>
+                  <class name="circular"/>
+                  <class name="image-button"/>
+                </style>
+              </object>
+            </child>
+            <child>
               <object class="GtkButton" id="token_button">
                 <property name="tooltip-text" translatable="yes">Discogs Personal Access Token</property>
                 <property name="valign">center</property>

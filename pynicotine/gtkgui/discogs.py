@@ -21,6 +21,7 @@ class Discogs:
 
         (
             self.container,
+            self.folder_name_button,
             self.labels_list_container,
             self.library_folders_button,
             self.library_label,
@@ -384,11 +385,36 @@ class Discogs:
         config.sections["discogs"]["token"] = dialog.get_entry_value().strip()
         config.write_configuration()
 
+    def on_set_folder_name(self, *_args):
+
+        EntryDialog(
+            application=self.window.application,
+            title=_("Downloaded Folder Name"),
+            message=_("Folders of releases you search for from this tab are renamed once downloaded. "
+                      "Available variables: $year, $catno, $artist and $title. "
+                      "Leave empty to keep the original folder names."),
+            default=config.sections["discogs"]["folder_name_pattern"],
+            action_button_label=_("_Save"),
+            callback=self.on_folder_name_response
+        ).present()
+
+    def on_folder_name_response(self, dialog, _response_id, _data):
+
+        if not self.__dict__:
+            # Tab was closed
+            return
+
+        config.sections["discogs"]["folder_name_pattern"] = dialog.get_entry_value().strip()
+        config.write_configuration()
+
     def on_search_release(self, *_args):
 
         for iterator in self.releases_list_view.get_selected_rows():
             artist = self.releases_list_view.get_row_value(iterator, "artist")
             title = self.releases_list_view.get_row_value(iterator, "title")
+            year = self.releases_list_view.get_row_value(iterator, "year_data")
+            catno = self.releases_list_view.get_row_value(iterator, "catno")
 
+            core.discogs.add_pending_release(artist, title, year, catno)
             core.search.do_search(core.discogs.get_search_term(artist, title), mode="global")
             return

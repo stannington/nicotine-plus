@@ -4,6 +4,7 @@
 import json
 import os
 import re
+import string
 import threading
 
 from urllib.parse import quote
@@ -15,6 +16,8 @@ import pynicotine
 from pynicotine.config import config
 from pynicotine.events import events
 from pynicotine.logfacility import log
+from pynicotine.utils import clean_file
+from pynicotine.utils import encode_path
 
 
 class DiscogsLabel:
@@ -107,8 +110,8 @@ class LibraryIndex:
         artist = Discogs.ARTIST_NUMBER_PATTERN.sub("", artist)
 
         for words, min_words in (
-            (self._get_significant_words(f"{artist} {title}"), self.MIN_SIGNIFICANT_WORDS),
-            (self._get_significant_words(title), self.MIN_SIGNIFICANT_TITLE_WORDS)
+            (self.get_significant_words(f"{artist} {title}"), self.MIN_SIGNIFICANT_WORDS),
+            (self.get_significant_words(title), self.MIN_SIGNIFICANT_TITLE_WORDS)
         ):
             if len(words) < min_words:
                 # Too few words for a reliable match
@@ -121,11 +124,12 @@ class LibraryIndex:
 
         return None
 
-    def _get_significant_words(self, text):
+    @classmethod
+    def get_significant_words(cls, text):
         return {
-            word for word in self.get_words(text)
+            word for word in cls.get_words(text)
             # Keep short numbers, so that e.g. "Part 4" doesn't match "Part 1"
-            if (len(word) >= 3 or word.isdigit()) and word not in self.IGNORED_WORDS
+            if (len(word) >= 3 or word.isdigit()) and word not in cls.IGNORED_WORDS
         }
 
     def _find_folder_with_words(self, words):
@@ -178,6 +182,7 @@ class Discogs:
     VARIOUS_ARTISTS = {"various", "various artists"}
     LIBRARY_CACHE_FILE_NAME = "discogs_library.json"
     LIBRARY_CACHE_VERSION = 1
+    MAX_PENDING_RELEASES = 100
 
     def __init__(self):
 
@@ -189,11 +194,128 @@ class Discogs:
 
     def _folder_download_finished(self, folder_path):
 
+        folder_path = self._rename_downloaded_folder(folder_path)
+
         if self.library is None:
             return
 
         self.library.add_folder(folder_path)
         events.emit("discogs-library-updated")
+
+    def add_pending_release(self, artist, title, year, catno):
+        """Remember a release searched for from the Discogs tab, so that its
+        folder can be renamed once it's downloaded."""
+
+        pending_releases = config.sections["discogs"]["pending_releases"]
+        release = [artist, title, year or 0, catno]
+
+        if release in pending_releases:
+            pending_releases.remove(release)
+
+        pending_releases.append(release)
+        del pending_releases[:-self.MAX_PENDING_RELEASES]
+
+    def get_folder_name(self, pattern, artist, title, year, catno):
+        """Create a folder name for a release from a pattern such as
+        "$year $catno $artist - $title"."""
+
+        artist = self.ARTIST_NUMBER_PATTERN.sub("", artist).replace("*", "")
+
+        if catno.strip().lower() == "none":
+            # Discogs uses "none" for releases without a catalogue number
+            catno = ""
+
+        folder_name = string.Template(pattern).safe_substitute(
+            year=year or "", catno=catno, artist=artist, title=title)
+
+        # Remove extra spaces left by empty values
+        return clean_file(" ".join(folder_name.split()))
+
+    def _find_pending_release(self, folder_path):
+        """Return the pending release whose title words are all in the
+        folder name or its file names, or None."""
+
+        try:
+            names = os.listdir(encode_path(folder_path))
+
+        except OSError as error:
+            log.add_debug("Unable to read downloaded folder %s: %s", (folder_path, error))
+            return None
+
+        words = set(LibraryIndex.get_words(os.path.basename(folder_path)))
+
+        for name in names:
+            if isinstance(name, bytes):
+                name = name.decode("utf-8", "replace")
+
+            words.update(LibraryIndex.get_words(name))
+
+        # Most recently searched first
+        for release in reversed(config.sections["discogs"]["pending_releases"]):
+            _artist, title, _year, _catno = release
+            title_words = LibraryIndex.get_significant_words(title)
+
+            if title_words and title_words <= words:
+                return release
+
+        return None
+
+    def _is_top_download_folder(self, folder_path):
+        """Check that the folder is a release folder directly in the
+        download folder, and not e.g. a "CD1" subfolder of a release."""
+
+        download_folder_path = os.path.normpath(os.path.expandvars(config.sections["transfers"]["downloaddir"]))
+        parent_folder_path = os.path.dirname(os.path.normpath(folder_path))
+
+        if parent_folder_path == download_folder_path:
+            return True
+
+        # Folders can be in a subfolder per user
+        return (config.sections["transfers"]["usernamesubfolders"]
+                and os.path.dirname(parent_folder_path) == download_folder_path)
+
+    def _rename_downloaded_folder(self, folder_path):
+        """Rename a downloaded folder of a release searched for from the
+        Discogs tab, using the folder name pattern. Return the new path, or
+        the old path if the folder was not renamed."""
+
+        pattern = config.sections["discogs"]["folder_name_pattern"].strip()
+
+        if not pattern or not config.sections["discogs"]["pending_releases"]:
+            return folder_path
+
+        if not self._is_top_download_folder(folder_path):
+            return folder_path
+
+        release = self._find_pending_release(folder_path)
+
+        if release is None:
+            return folder_path
+
+        folder_name = self.get_folder_name(pattern, *release)
+        new_folder_path = os.path.join(os.path.dirname(folder_path), folder_name)
+
+        if new_folder_path == folder_path:
+            config.sections["discogs"]["pending_releases"].remove(release)
+            return folder_path
+
+        if os.path.exists(encode_path(new_folder_path)):
+            log.add(_("Cannot rename downloaded folder %(old)s to %(new)s: a folder with that name already "
+                      "exists"), {"old": folder_path, "new": folder_name})
+            return folder_path
+
+        try:
+            os.rename(encode_path(folder_path), encode_path(new_folder_path))
+
+        except OSError as error:
+            log.add(_("Cannot rename downloaded folder %(old)s to %(new)s: %(error)s"), {
+                "old": folder_path, "new": folder_name, "error": error})
+            return folder_path
+
+        config.sections["discogs"]["pending_releases"].remove(release)
+        log.add(_("Renamed downloaded folder %(old)s to %(new)s"), {"old": folder_path, "new": folder_name})
+
+        return new_folder_path
 
     def get_library_folders(self):
         """Folders to scan: the chosen library folders and the download

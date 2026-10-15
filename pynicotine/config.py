@@ -410,7 +410,9 @@ class Config:
             },
             "discogs": {
                 "token": "",
-                "library_folders": []
+                "library_folders": [],
+                "folder_name_pattern": "$year $catno $artist - $title",
+                "pending_releases": []
             },
             "interests": {
                 "likes": [],

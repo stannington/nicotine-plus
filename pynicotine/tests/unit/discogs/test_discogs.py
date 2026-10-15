@@ -324,3 +324,87 @@ class LibraryScanTest(TestCase):
 
         core.discogs.library = None
         self.assertEqual(len(self.run_scan()), 1)
+
+
+class FolderRenameTest(TestCase):
+
+    # pylint: disable=protected-access
+
+    def setUp(self):
+
+        config.set_data_folder(DATA_FOLDER_PATH)
+        config.set_config_file(os.path.join(DATA_FOLDER_PATH, "temp_config"))
+
+        core.init_components(enabled_components={"discogs"})
+        core.start()
+
+        self.download_path = os.path.join(DATA_FOLDER_PATH, "rename_downloads")
+        config.sections["transfers"]["downloaddir"] = self.download_path
+        config.sections["discogs"]["folder_name_pattern"] = "$year $catno $artist - $title"
+        config.sections["discogs"]["pending_releases"] = []
+
+    def tearDown(self):
+        core.quit()
+        shutil.rmtree(self.download_path, ignore_errors=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(DATA_FOLDER_PATH, ignore_errors=True)
+
+    def create_folder(self, *folder_names, file_names=()):
+
+        folder_path = os.path.join(self.download_path, *folder_names)
+        os.makedirs(folder_path)
+
+        for file_name in file_names:
+            with open(os.path.join(folder_path, file_name), "w", encoding="utf-8"):
+                pass
+
+        return folder_path
+
+    def test_get_folder_name(self):
+
+        pattern = "$year $catno $artist - $title"
+
+        self.assertEqual(
+            core.discogs.get_folder_name(pattern, "Calibre (2)", "Even If: Part 2", 2024, "SIG042"),
+            "2024 SIG042 Calibre - Even If_ Part 2")
+        self.assertEqual(
+            core.discogs.get_folder_name(pattern, "Artist*", "Title", 0, "none"), "Artist - Title")
+
+    def test_rename_downloaded_folder(self):
+
+        core.discogs.add_pending_release("Other Artist", "Unrelated Release", 2020, "OTH001")
+        core.discogs.add_pending_release("Test Artist", "Night Signals", 2024, "EXR 042")
+
+        # The title is only in the file names
+        folder_path = self.create_folder("tunes", file_names=("01 night_signals.flac",))
+        core.discogs._folder_download_finished(folder_path)
+
+        new_folder_path = os.path.join(self.download_path, "2024 EXR 042 Test Artist - Night Signals")
+
+        self.assertTrue(os.path.isdir(new_folder_path))
+        self.assertFalse(os.path.exists(folder_path))
+        self.assertEqual(
+            config.sections["discogs"]["pending_releases"], [["Other Artist", "Unrelated Release", 2020, "OTH001"]])
+
+    def test_keep_folder_name(self):
+
+        core.discogs.add_pending_release("Test Artist", "Night Signals", 2024, "EXR042")
+
+        # Not a pending release
+        folder_path = self.create_folder("Something Else")
+        core.discogs._folder_download_finished(folder_path)
+        self.assertTrue(os.path.isdir(folder_path))
+
+        # Subfolders of a release are not renamed
+        folder_path = self.create_folder("Night Signals", "CD1", file_names=("night signals.flac",))
+        core.discogs._folder_download_finished(folder_path)
+        self.assertTrue(os.path.isdir(folder_path))
+
+        # Renaming is turned off
+        config.sections["discogs"]["folder_name_pattern"] = ""
+        folder_path = self.create_folder("Night Signals Download")
+        core.discogs._folder_download_finished(folder_path)
+        self.assertTrue(os.path.isdir(folder_path))
+        self.assertEqual(len(config.sections["discogs"]["pending_releases"]), 1)
