@@ -411,7 +411,7 @@ class Config:
             "discogs": {
                 "token": "",
                 "library_folders": [],
-                "folder_name_pattern": "$year $catno $artist - $title",
+                "folder_name_pattern": "$label/$year $catno $artist - $title",
                 "pending_releases": [],
                 "favourite_labels": [],
                 "last_seen_releases": {},

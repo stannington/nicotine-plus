@@ -183,6 +183,8 @@ class Discogs:
     LIBRARY_CACHE_FILE_NAME = "discogs_library.json"
     LIBRARY_CACHE_VERSION = 1
     MAX_PENDING_RELEASES = 100
+    OLD_DEFAULT_FOLDER_NAME_PATTERN = "$year $catno $artist - $title"
+    CATNO_SEPARATOR_PATTERN = re.compile(r"[\s\-\u2010-\u2015]+")  # Spaces and dashes
     # Years not joined to letters or digits, so that e.g. "EXR1995" doesn't count
     YEAR_PATTERN = re.compile(r"(?<![^\W_])(?:19|20)\d\d(?![^\W_])")
 
@@ -191,6 +193,10 @@ class Discogs:
         self.library = None
         self.is_scanning_library = False
         self._should_rescan_library = False
+
+        if config.sections["discogs"]["folder_name_pattern"] == self.OLD_DEFAULT_FOLDER_NAME_PATTERN:
+            # Upgrade the previous default pattern to the new one with a label folder
+            config.sections["discogs"]["folder_name_pattern"] = config.defaults["discogs"]["folder_name_pattern"]
 
         events.connect("folder-download-finished", self._folder_download_finished)
 
@@ -260,12 +266,12 @@ class Discogs:
         if release_id > last_seen_releases.get(label_id, 0):
             last_seen_releases[label_id] = release_id
 
-    def add_pending_release(self, artist, title, year, catno):
+    def add_pending_release(self, artist, title, year, catno, label=""):
         """Remember a release searched for from the Discogs tab, so that its
         folder can be renamed once it's downloaded."""
 
         pending_releases = config.sections["discogs"]["pending_releases"]
-        release = [artist, title, year or 0, catno]
+        release = [artist, title, year or 0, catno, label]
 
         if release in pending_releases:
             pending_releases.remove(release)
@@ -273,21 +279,35 @@ class Discogs:
         pending_releases.append(release)
         del pending_releases[:-self.MAX_PENDING_RELEASES]
 
-    def get_folder_name(self, pattern, artist, title, year, catno):
+    def get_folder_name(self, pattern, artist, title, year, catno, label=""):
         """Create a folder name for a release from a pattern such as
-        "$year $catno $artist - $title"."""
+        "$label/$year $catno $artist - $title". Each "/" in the pattern
+        creates a subfolder, so the result can be a relative path."""
 
         artist = self.ARTIST_NUMBER_PATTERN.sub("", artist).replace("*", "")
+        label = self.ARTIST_NUMBER_PATTERN.sub("", label)
 
-        if catno.strip().lower() == "none":
+        # Use the first catalogue number as one block, e.g. "DSCI4 047" as "DSCI4047"
+        catno = self.CATNO_SEPARATOR_PATTERN.sub("", catno.split(",", 1)[0])
+
+        if catno.lower() == "none":
             # Discogs uses "none" for releases without a catalogue number
             catno = ""
 
-        folder_name = string.Template(pattern).safe_substitute(
-            year=year or "", catno=catno, artist=artist, title=title)
+        folder_names = []
 
-        # Remove extra spaces left by empty values
-        return clean_file(" ".join(folder_name.split()))
+        for pattern_part in pattern.split("/"):
+            folder_name = string.Template(pattern_part).safe_substitute(
+                year=year or "", catno=catno, artist=artist, title=title, label=label)
+
+            # Remove extra spaces left by empty values
+            folder_name = " ".join(folder_name.split())
+
+            if folder_name:
+                # Skip empty parts, e.g. no label for releases searched before labels were saved
+                folder_names.append(clean_file(folder_name))
+
+        return os.path.join(*folder_names) if folder_names else ""
 
     def _find_pending_release(self, folder_path):
         """Return the pending release whose title words or catalogue number
@@ -315,7 +335,7 @@ class Discogs:
 
         # Most recently searched first
         for release in reversed(config.sections["discogs"]["pending_releases"]):
-            artist, title, _year, catno = release
+            artist, title, _year, catno, *_label = release
             title_words = LibraryIndex.get_significant_words(title)
 
             if title_words and title_words <= words:
@@ -359,6 +379,10 @@ class Discogs:
             return folder_path
 
         folder_name = self.get_folder_name(pattern, *release)
+
+        if not folder_name:
+            return folder_path
+
         new_folder_path = os.path.join(os.path.dirname(folder_path), folder_name)
 
         if new_folder_path == folder_path:
@@ -371,6 +395,8 @@ class Discogs:
             return folder_path
 
         try:
+            # Create the label folder, if the pattern has one
+            os.makedirs(encode_path(os.path.dirname(new_folder_path)), exist_ok=True)
             os.rename(encode_path(folder_path), encode_path(new_folder_path))
 
         except OSError as error:

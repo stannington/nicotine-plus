@@ -372,6 +372,28 @@ class FolderRenameTest(TestCase):
         self.assertEqual(
             core.discogs.get_folder_name(pattern, "Artist*", "Title", 0, "none"), "Artist - Title")
 
+        # Catalogue numbers become one block, using only the first one
+        for catno, folder_name in (
+            ("DSCI4 047", "2025 DSCI4047 HLZ - Rust EP"),
+            ("31R - 002", "2025 31R002 HLZ - Rust EP"),
+            ("EXR\u2013042", "2025 EXR042 HLZ - Rust EP"),
+            ("META001, META001X", "2025 META001 HLZ - Rust EP")
+        ):
+            with self.subTest(catno=catno):
+                self.assertEqual(core.discogs.get_folder_name(pattern, "HLZ", "Rust EP", 2025, catno), folder_name)
+
+        # A "/" creates a label folder, without the Discogs number in the label name
+        label_pattern = "$label/$year $catno $artist - $title"
+
+        self.assertEqual(
+            core.discogs.get_folder_name(label_pattern, "HLZ", "Rust EP", 2025, "DSCI4 047", "Dispatch (2)"),
+            os.path.join("Dispatch", "2025 DSCI4047 HLZ - Rust EP"))
+
+        # Releases saved before labels were remembered have no label folder
+        self.assertEqual(
+            core.discogs.get_folder_name(label_pattern, "HLZ", "Rust EP", 2025, "DSCI4 047"),
+            "2025 DSCI4047 HLZ - Rust EP")
+
     def test_rename_downloaded_folder(self):
 
         core.discogs.add_pending_release("Other Artist", "Unrelated Release", 2020, "OTH001")
@@ -381,12 +403,49 @@ class FolderRenameTest(TestCase):
         folder_path = self.create_folder("tunes", file_names=("01 night_signals.flac",))
         core.discogs._folder_download_finished(folder_path)
 
-        new_folder_path = os.path.join(self.download_path, "2024 EXR 042 Test Artist - Night Signals")
+        new_folder_path = os.path.join(self.download_path, "2024 EXR042 Test Artist - Night Signals")
 
         self.assertTrue(os.path.isdir(new_folder_path))
         self.assertFalse(os.path.exists(folder_path))
         self.assertEqual(
-            config.sections["discogs"]["pending_releases"], [["Other Artist", "Unrelated Release", 2020, "OTH001"]])
+            config.sections["discogs"]["pending_releases"], [["Other Artist", "Unrelated Release", 2020, "OTH001", ""]])
+
+    def test_upgrade_old_default_pattern(self):
+
+        from pynicotine.discogs import Discogs
+
+        for pattern, upgraded_pattern in (
+            ("$year $catno $artist - $title", "$label/$year $catno $artist - $title"),
+            ("$artist - $title", "$artist - $title"),  # Custom patterns are kept
+            ("", "")                                    # Renaming stays off
+        ):
+            config.sections["discogs"]["folder_name_pattern"] = pattern
+
+            with patch("pynicotine.events.Events.connect"):
+                Discogs()
+
+            with self.subTest(pattern=pattern):
+                self.assertEqual(config.sections["discogs"]["folder_name_pattern"], upgraded_pattern)
+
+    def test_rename_into_label_folder(self):
+
+        config.sections["discogs"]["folder_name_pattern"] = "$label/$year $catno $artist - $title"
+        core.discogs.add_pending_release("HLZ", "Rust EP", 2025, "DSCI4 047", "Example Recordings")
+
+        folder_path = self.create_folder("HLZ - Rust EP (WEB FLAC)", file_names=("01 rust.flac",))
+        core.discogs._folder_download_finished(folder_path)
+
+        self.assertTrue(os.path.isdir(
+            os.path.join(self.download_path, "Example Recordings", "2025 DSCI4047 HLZ - Rust EP")))
+        self.assertFalse(os.path.exists(folder_path))
+
+        # Releases searched for before labels were remembered are renamed without a label folder
+        config.sections["discogs"]["pending_releases"].append(["Test Artist", "Night Signals", 2024, "EXR042"])
+
+        folder_path = self.create_folder("Night Signals", file_names=("01.flac",))
+        core.discogs._folder_download_finished(folder_path)
+
+        self.assertTrue(os.path.isdir(os.path.join(self.download_path, "2024 EXR042 Test Artist - Night Signals")))
 
     def test_rename_by_catno(self):
 

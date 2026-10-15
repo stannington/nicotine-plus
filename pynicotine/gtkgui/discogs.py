@@ -54,6 +54,7 @@ class Discogs:
         # in case an older request finishes after a newer one
         self.search_query = None
         self.label_id = None
+        self.label_name = ""
         self.page_number = 0
         self.num_pages = 0
 
@@ -411,7 +412,8 @@ class Discogs:
         self.last_seen_release_id = core.discogs.get_last_seen_release_id(label_id)
 
         self.releases_list_view.clear()
-        self.releases_label.set_label(list_view.get_row_value(iterator, "label"))
+        self.label_name = list_view.get_row_value(iterator, "label")
+        self.releases_label.set_label(self.label_name)
         self.load_more_button.set_visible(False)
         self.request_releases(page_number=1)
 
@@ -551,7 +553,8 @@ class Discogs:
             application=self.window.application,
             title=_("Downloaded Folder Name"),
             message=_("Folders of releases you search for from this tab are renamed once downloaded. "
-                      "Available variables: $year, $catno, $artist and $title. "
+                      "Available variables: $label, $year, $catno, $artist and $title. "
+                      "A / creates a subfolder, e.g. $label/$year $title. "
                       "Leave empty to keep the original folder names."),
             default=config.sections["discogs"]["folder_name_pattern"],
             action_button_label=_("_Save"),
@@ -575,7 +578,7 @@ class Discogs:
             year = self.releases_list_view.get_row_value(iterator, "year_data")
             catno = self.releases_list_view.get_row_value(iterator, "catno")
 
-            core.discogs.add_pending_release(artist, title, year, catno)
+            core.discogs.add_pending_release(artist, title, year, catno, self.label_name)
             core.search.do_search(core.discogs.get_search_term(artist, title), mode="global")
             return
 
@@ -592,6 +595,6 @@ class Discogs:
                 self.status_label.set_label(_("This release has no catalogue number"))
                 return
 
-            core.discogs.add_pending_release(artist, title, year, catno)
+            core.discogs.add_pending_release(artist, title, year, catno, self.label_name)
             core.search.do_search(search_term, mode="global")
             return
