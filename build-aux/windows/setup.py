@@ -12,6 +12,9 @@ import tempfile
 from typing import Callable
 from typing import TypeVar
 
+# Always use ldd instead of patchelf to find dependencies on Linux
+os.environ["CX_FREEZE_BIND"] = ""           # noqa: E402
+
 from cx_Freeze import Executable, setup     # pylint: disable=import-error
 from cx_Freeze.hooks import _gi_ as gi      # pylint: disable=import-private-name
 
@@ -312,6 +315,26 @@ setup(
             "launch_on_finish": True,
             "dist_dir": BUILD_PATH,
             "install_icon": os.path.join(CURRENT_PATH, ICON_NAME),
+            "data": {
+                "Registry": [
+                    (
+                        f"{pynicotine.__application_name__}URLProtocol",
+                        -1,
+                        "Software\\Classes\\slsk",
+                        "URL Protocol",
+                        "",
+                        "TARGETDIR"
+                    ),
+                    (
+                        f"{pynicotine.__application_name__}URLCommand",
+                        -1,
+                        "Software\\Classes\\slsk\\shell\\open\\command",
+                        None,
+                        f'"[TARGETDIR]{pynicotine.__application_name__}.exe" "%1"',
+                        "TARGETDIR"
+                    )
+                ]
+            },
             "upgrade_code": "{8ffb9dbb-7106-41fc-9e8a-b2469aa1fe9f}"
         },
         "bdist_mac": {

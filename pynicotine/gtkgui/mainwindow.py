@@ -250,8 +250,8 @@ class MainWindow(Window):
             ("cli-completions", self.update_completions),
             ("log-message", self.log_callback),
             ("quit", self.on_quit),
-            ("server-login", self.update_user_status),
-            ("server-disconnect", self.update_user_status),
+            ("server-login", self.server_login),
+            ("server-disconnect", self.server_disconnect),
             ("set-connection-stats", self.set_connection_stats),
             ("shares-ready", self.shares_ready),
             ("shares-scanning", self.shares_scanning),
@@ -1017,6 +1017,9 @@ class MainWindow(Window):
             self.remove_away_timer()
 
         # Status bar
+        if core.uploads.pending_shutdown:
+            return
+
         username = core.users.login_username
         icon_name = USER_STATUS_ICON_NAMES[status]
         icon_args = (Gtk.IconSize.BUTTON,) if GTK_API_VERSION == 3 else ()  # pylint: disable=no-member
@@ -1047,6 +1050,13 @@ class MainWindow(Window):
             toggle_status_action.set_enabled(False)
             self.user_status_button.set_active(False)
             toggle_status_action.set_enabled(True)
+
+    def server_login(self, msg):
+        if msg.success:
+            self.update_user_status()
+
+    def server_disconnect(self, *_args):
+        self.update_user_status()
 
     def user_status(self, msg):
         if msg.user == core.users.login_username:

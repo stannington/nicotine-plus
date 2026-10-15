@@ -56,12 +56,16 @@ class Application:
 
     def __init__(self, start_hidden, ci_mode, isolated_mode, multi_instance):
 
-        self._instance = Gtk.Application(application_id=pynicotine.__application_id__, register_session=True)
-        GLib.set_application_name(pynicotine.__application_name__)
-        GLib.set_prgname(pynicotine.__application_id__)
+        flags = Gio.ApplicationFlags.HANDLES_OPEN
 
         if multi_instance:
-            self._instance.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
+            flags |= Gio.ApplicationFlags.NON_UNIQUE
+
+        self._instance = Gtk.Application(
+            application_id=pynicotine.__application_id__, flags=flags, register_session=True
+        )
+        GLib.set_application_name(pynicotine.__application_name__)
+        GLib.set_prgname(pynicotine.__application_id__)
 
         self.start_hidden = start_hidden
         self.ci_mode = ci_mode
@@ -80,9 +84,11 @@ class Application:
         self.tray_icon = None
         self.spell_checker = None
 
-        self.inhibit_logout_cookie = None
         self.previous_download_folder = None
         self.previous_file_download_folder = None
+
+        self._pending_files = []
+        self._inhibit_logout_cookie = None
 
         # Show errors in the GUI from here on
         sys.excepthook = self.on_critical_error
@@ -91,10 +97,14 @@ class Application:
         # language, we need to revise this.
         Gtk.Widget.set_default_direction(Gtk.TextDirection.LTR)
 
-        self._instance.connect("startup", self.on_startup)
-        self._instance.connect("activate", self.on_activate)
-        self._instance.connect("query-end", self.on_query_end)
-        self._instance.connect("shutdown", self.on_shutdown)
+        for signal_name, callback in (
+            ("startup", self.on_startup),
+            ("activate", self.on_activate),
+            ("open", self.on_open),
+            ("query-end", self.on_query_end),
+            ("shutdown", self.on_shutdown)
+        ):
+            self._instance.connect(signal_name, callback)
 
     def run(self, argv):
         return self._instance.run(argv)
@@ -117,25 +127,25 @@ class Application:
     def remove_window(self, window):
         self._instance.remove_window(window)
 
-    def inhibit_logout(self, reason):
+    def get_accels_for_action(self, action_name):
+        return self._instance.get_accels_for_action(action_name)
 
-        if self.inhibit_logout_cookie:
+    def _inhibit_logout(self, reason):
+
+        if self._inhibit_logout_cookie:
             return
 
-        self.inhibit_logout_cookie = self._instance.inhibit(
+        self._inhibit_logout_cookie = self._instance.inhibit(
             self.window.widget, Gtk.ApplicationInhibitFlags.LOGOUT, reason
         )
 
-    def uninhibit_logout(self):
+    def _uninhibit_logout(self):
 
-        if not self.inhibit_logout_cookie:
+        if not self._inhibit_logout_cookie:
             return
 
-        self._instance.uninhibit(self.inhibit_logout_cookie)
-        self.inhibit_logout_cookie = None
-
-    def get_accels_for_action(self, action_name):
-        return self._instance.get_accels_for_action(action_name)
+        self._instance.uninhibit(self._inhibit_logout_cookie)
+        self._inhibit_logout_cookie = None
 
     def _set_up_actions(self):
 
@@ -283,6 +293,13 @@ class Application:
 
         # Disable Alt+1-9 accelerators for numpad keys to avoid conflict with Alt codes
         self._set_accels_for_action("app.disabled", numpad_accels)
+
+    def _open_pending_files(self):
+
+        for file in self._pending_files:
+            core.userbrowse.open_soulseek_url(file.get_uri())
+
+        self._pending_files.clear()
 
     def _update_user_status(self, *_args):
 
@@ -511,6 +528,17 @@ class Application:
         )
 
     # Core Events #
+
+    def on_server_login(self, msg):
+
+        if not msg.success:
+            return
+
+        self._update_user_status()
+        self._open_pending_files()
+
+    def on_server_disconnect(self, *_args):
+        self._update_user_status()
 
     def on_confirm_quit_response(self, dialog, response_id, _data):
 
@@ -1003,8 +1031,8 @@ class Application:
             ("invalid-username", self.on_invalid_username),
             ("room-invitation-rejected", self.on_room_invitation_rejected),
             ("quit", self._instance.quit),
-            ("server-login", self._update_user_status),
-            ("server-disconnect", self._update_user_status),
+            ("server-login", self.on_server_login),
+            ("server-disconnect", self.on_server_disconnect),
             ("setup", self.on_fast_configure),
             ("shares-unavailable", self.on_shares_unavailable),
             ("show-notification", self._show_notification),
@@ -1067,6 +1095,17 @@ class Application:
         if start_hidden:
             self.window.minimize()
 
+    def on_open(self, _application, files, _num_files, _hint):
+
+        self.activate()
+
+        self._pending_files.extend(files)
+        core.connect()
+        self.window.present()
+
+        if core.users.login_status != UserStatus.OFFLINE:
+            self._open_pending_files()
+
     def on_confirm_quit_request(self, *_args):
         core.confirm_quit()
 
@@ -1082,7 +1121,7 @@ class Application:
         core.confirm_quit()
 
     def on_query_end(self, *_args):
-        self.inhibit_logout(_("Saving configuration…"))
+        self._inhibit_logout(_("Saving configuration…"))
         core.quit()
 
     def on_shutdown(self, *_args):
@@ -1123,5 +1162,5 @@ class Application:
         if self.tray_icon is not None:
             self.tray_icon.destroy()
 
-        self.uninhibit_logout()
+        self._uninhibit_logout()
         self.__dict__.clear()

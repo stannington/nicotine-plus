@@ -40,9 +40,11 @@ using the package manager.
 | [OpenMandriva](https://github.com/OpenMandrivaAssociation/nicotineplus)                  | `nicotine+`                |
 | [Parabola](https://www.parabola.nu/packages/extra/x86_64/nicotine+/)                     | `nicotine+`                |
 | [PLD Linux](https://git.pld-linux.org/?p=packages/nicotine.git;a=tree)                   | `nicotine`                 |
+| [SlackBuilds](https://slackbuilds.org/repository/15.0/network/nicotine+/)                | `nicotine+`                |
 | [Solus](https://github.com/getsolus/packages/tree/main/packages/n/nicotine-plus)         | `nicotine-plus`            |
 | [T2 SDE](https://t2sde.org/packages/nicotine-plus)                                       | `nicotine-plus`            |
 | [Void Linux](https://github.com/void-linux/void-packages/tree/master/srcpkgs/nicotine+)  | `nicotine+`                |
+| [Vylen Linux](https://vylen.gitlab.io/packages/#nicotine-plus)                           | `nicotine-plus`            |
 
 ### Universal Packages (GNU/Linux)
 
@@ -148,6 +150,7 @@ using them.
 | Package Manager                                                                                    | Package Name           |
 |----------------------------------------------------------------------------------------------------|------------------------|
 | [Chocolatey](https://community.chocolatey.org/packages/nicotine-plus)                              | `nicotine-plus`        |
+| [MSYS2](https://packages.msys2.org/base/mingw-w64-nicotine+)                                       | `nicotine+`            |
 | [Scoop](https://github.com/ScoopInstaller/Extras/blob/master/bucket/nicotine-plus.json)            | `extras/nicotine-plus` |
 | [Winget](https://github.com/microsoft/winget-pkgs/tree/master/manifests/n/Nicotine%2B/Nicotine%2B) | `nicotine+.nicotine+`  |
 
