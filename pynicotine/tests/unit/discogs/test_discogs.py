@@ -388,6 +388,16 @@ class FolderRenameTest(TestCase):
         self.assertEqual(
             config.sections["discogs"]["pending_releases"], [["Other Artist", "Unrelated Release", 2020, "OTH001"]])
 
+    def test_rename_by_catno(self):
+
+        core.discogs.add_pending_release("Test Artist", "Night Signals", 2024, "EXR042")
+
+        # Only the catalogue number is in the folder name
+        folder_path = self.create_folder("[EXR-042] web", file_names=("a1.flac",))
+        core.discogs._folder_download_finished(folder_path)
+
+        self.assertTrue(os.path.isdir(os.path.join(self.download_path, "2024 EXR042 Test Artist - Night Signals")))
+
     def test_keep_folder_name(self):
 
         core.discogs.add_pending_release("Test Artist", "Night Signals", 2024, "EXR042")
@@ -408,3 +418,68 @@ class FolderRenameTest(TestCase):
         core.discogs._folder_download_finished(folder_path)
         self.assertTrue(os.path.isdir(folder_path))
         self.assertEqual(len(config.sections["discogs"]["pending_releases"]), 1)
+
+
+class DiscogsFeaturesTest(TestCase):
+
+    def setUp(self):
+
+        config.set_data_folder(DATA_FOLDER_PATH)
+        config.set_config_file(os.path.join(DATA_FOLDER_PATH, "temp_config"))
+
+        core.init_components(enabled_components={"discogs"})
+        core.start()
+
+        config.sections["discogs"]["favourite_labels"] = []
+        config.sections["discogs"]["last_seen_releases"] = {}
+
+    def tearDown(self):
+        core.quit()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(DATA_FOLDER_PATH, ignore_errors=True)
+
+    def test_is_earlier_version(self):
+
+        self.assertTrue(core.discogs.is_earlier_version("Labels/Example/1995 Artist - Timeless", 2025))
+        self.assertFalse(core.discogs.is_earlier_version("Labels/Example/2025 Artist - Timeless", 2025))
+        self.assertFalse(core.discogs.is_earlier_version("Labels/Example/1995 Artist - Timeless", None))
+
+        # No year in the folder name, or only numbers that aren't years
+        self.assertFalse(core.discogs.is_earlier_version("Labels/Example/Artist - Timeless", 2025))
+        self.assertFalse(core.discogs.is_earlier_version("Labels/Example/EXR1995 Artist - Timeless", 2025))
+
+        # The newest year counts, e.g. a remaster
+        self.assertFalse(core.discogs.is_earlier_version("Labels/Example/1995 Timeless (2025 Remaster)", 2025))
+
+    def test_get_catno_search_term(self):
+
+        self.assertEqual(core.discogs.get_catno_search_term("META 112"), "META 112")
+        self.assertEqual(core.discogs.get_catno_search_term("none, EXR042"), "EXR042")
+        self.assertEqual(core.discogs.get_catno_search_term("-EXR042"), "EXR042")
+        self.assertIsNone(core.discogs.get_catno_search_term("none"))
+        self.assertIsNone(core.discogs.get_catno_search_term(""))
+
+    def test_favourite_labels(self):
+
+        core.discogs.add_favourite_label(1, "Example Recordings")
+        core.discogs.add_favourite_label(1, "Example Recordings")
+        core.discogs.add_favourite_label(2, "Other Label")
+
+        self.assertTrue(core.discogs.is_favourite_label(1))
+        self.assertEqual(len(config.sections["discogs"]["favourite_labels"]), 2)
+
+        core.discogs.remove_favourite_label(1)
+
+        self.assertFalse(core.discogs.is_favourite_label(1))
+        self.assertEqual(config.sections["discogs"]["favourite_labels"], [[2, "Other Label"]])
+
+    def test_last_seen_release_id(self):
+
+        self.assertIsNone(core.discogs.get_last_seen_release_id(1))
+
+        core.discogs.set_last_seen_release_id(1, 500)
+        core.discogs.set_last_seen_release_id(1, 300)
+
+        self.assertEqual(core.discogs.get_last_seen_release_id(1), 500)

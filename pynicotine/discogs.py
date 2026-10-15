@@ -183,6 +183,8 @@ class Discogs:
     LIBRARY_CACHE_FILE_NAME = "discogs_library.json"
     LIBRARY_CACHE_VERSION = 1
     MAX_PENDING_RELEASES = 100
+    # Years not joined to letters or digits, so that e.g. "EXR1995" doesn't count
+    YEAR_PATTERN = re.compile(r"(?<![^\W_])(?:19|20)\d\d(?![^\W_])")
 
     def __init__(self):
 
@@ -201,6 +203,62 @@ class Discogs:
 
         self.library.add_folder(folder_path)
         events.emit("discogs-library-updated")
+
+    def is_earlier_version(self, folder_path, year):
+        """Check if a library folder is likely an earlier version of a
+        release from the given year, e.g. the original of a reissue. Only
+        folders with a year in their name can be checked."""
+
+        if not year:
+            return False
+
+        folder_name = os.path.basename(os.path.normpath(folder_path))
+        folder_years = [int(folder_year) for folder_year in self.YEAR_PATTERN.findall(folder_name)]
+
+        return bool(folder_years) and max(folder_years) < year
+
+    def get_catno_search_term(self, catno):
+        """Create a Soulseek search term for a release's catalogue number,
+        or return None if it has none."""
+
+        for single_catno in catno.split(","):
+            # Same rules as for artist and title search terms
+            search_term = self.get_search_term("", single_catno)
+
+            if search_term and search_term.lower() != "none":
+                return search_term
+
+        return None
+
+    def is_favourite_label(self, label_id):
+        return any(favourite_id == label_id for favourite_id, _name in config.sections["discogs"]["favourite_labels"])
+
+    def add_favourite_label(self, label_id, name):
+
+        if not self.is_favourite_label(label_id):
+            config.sections["discogs"]["favourite_labels"].append([label_id, name])
+            config.write_configuration()
+
+    def remove_favourite_label(self, label_id):
+
+        config.sections["discogs"]["favourite_labels"] = [
+            favourite for favourite in config.sections["discogs"]["favourite_labels"] if favourite[0] != label_id
+        ]
+        config.write_configuration()
+
+    def get_last_seen_release_id(self, label_id):
+        """Return the highest release id seen for a label, or None if the
+        label was never viewed. Discogs ids increase as releases are added,
+        so releases with a higher id were added since."""
+
+        return config.sections["discogs"]["last_seen_releases"].get(label_id)
+
+    def set_last_seen_release_id(self, label_id, release_id):
+
+        last_seen_releases = config.sections["discogs"]["last_seen_releases"]
+
+        if release_id > last_seen_releases.get(label_id, 0):
+            last_seen_releases[label_id] = release_id
 
     def add_pending_release(self, artist, title, year, catno):
         """Remember a release searched for from the Discogs tab, so that its
@@ -232,8 +290,8 @@ class Discogs:
         return clean_file(" ".join(folder_name.split()))
 
     def _find_pending_release(self, folder_path):
-        """Return the pending release whose title words are all in the
-        folder name or its file names, or None."""
+        """Return the pending release whose title words or catalogue number
+        are in the folder name or its file names, or None."""
 
         try:
             names = os.listdir(encode_path(folder_path))
@@ -244,18 +302,26 @@ class Discogs:
 
         words = set(LibraryIndex.get_words(os.path.basename(folder_path)))
 
+        # Index the folder and file names, to find catalogue numbers in them
+        name_index = LibraryIndex()
+        name_index.add_folder(folder_path)
+
         for name in names:
             if isinstance(name, bytes):
                 name = name.decode("utf-8", "replace")
 
             words.update(LibraryIndex.get_words(name))
+            name_index.add_folder(name)
 
         # Most recently searched first
         for release in reversed(config.sections["discogs"]["pending_releases"]):
-            _artist, title, _year, _catno = release
+            artist, title, _year, catno = release
             title_words = LibraryIndex.get_significant_words(title)
 
             if title_words and title_words <= words:
+                return release
+
+            if name_index.find_release(artist, title, catno) is not None:
                 return release
 
         return None

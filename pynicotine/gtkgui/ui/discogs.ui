@@ -195,6 +195,14 @@
               </object>
             </child>
             <child>
+              <object class="GtkCheckButton" id="hide_owned_toggle">
+                <property name="label" translatable="yes">Hide Releases I Have</property>
+                <property name="valign">center</property>
+                <property name="visible">True</property>
+                <signal name="toggled" handler="on_hide_owned_toggled"/>
+              </object>
+            </child>
+            <child>
               <object class="GtkButton" id="load_more_button">
                 <property name="label" translatable="yes">Load More</property>
                 <property name="valign">center</property>

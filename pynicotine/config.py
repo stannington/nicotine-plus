@@ -412,7 +412,10 @@ class Config:
                 "token": "",
                 "library_folders": [],
                 "folder_name_pattern": "$year $catno $artist - $title",
-                "pending_releases": []
+                "pending_releases": [],
+                "favourite_labels": [],
+                "last_seen_releases": {},
+                "hide_owned_releases": False
             },
             "interests": {
                 "likes": [],

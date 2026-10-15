@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Nicotine+ Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from gi.repository import GLib
 from gi.repository import GObject
+from gi.repository import Pango
 
 from pynicotine.config import config
 from pynicotine.core import core
@@ -22,6 +24,7 @@ class Discogs:
         (
             self.container,
             self.folder_name_button,
+            self.hide_owned_toggle,
             self.labels_list_container,
             self.library_folders_button,
             self.library_label,
@@ -54,11 +57,21 @@ class Discogs:
         self.page_number = 0
         self.num_pages = 0
 
+        # All loaded releases of the selected label, including hidden ones
+        self.releases = {}
+        self.last_seen_release_id = None
+
         self.labels_list_view = TreeView(
             window, parent=self.labels_list_container,
             select_row_callback=self.on_select_label,
             columns={
                 # Visible columns
+                "favourite": {
+                    "column_type": "icon",
+                    "title": _("Favourite"),
+                    "width": 25,
+                    "hide_header": True
+                },
                 "label": {
                     "column_type": "text",
                     "title": _("Label")
@@ -68,6 +81,12 @@ class Discogs:
                 "id_data": {"data_type": GObject.TYPE_UINT64, "iterator_key": True},
                 "order_data": {"data_type": GObject.TYPE_UINT, "default_sort_type": "ascending"}
             }
+        )
+
+        self.labels_popup_menu = PopupMenu(
+            self.window.application, self.labels_list_view.widget, callback=self.on_labels_popup_menu)
+        self.labels_popup_menu.add_items(
+            ("$" + _("_Favourite Label"), self.on_favourite_label)
         )
 
         self.releases_list_view = TreeView(
@@ -92,13 +111,15 @@ class Discogs:
                     "column_type": "text",
                     "title": _("Artist"),
                     "width": 200,
-                    "expand_column": True
+                    "expand_column": True,
+                    "text_weight_column": "weight_data"
                 },
                 "title": {
                     "column_type": "text",
                     "title": _("Title"),
                     "width": 250,
-                    "expand_column": True
+                    "expand_column": True,
+                    "text_weight_column": "weight_data"
                 },
                 "catno": {
                     "column_type": "text",
@@ -116,14 +137,19 @@ class Discogs:
                 "id_data": {"data_type": GObject.TYPE_UINT64, "iterator_key": True},
                 "year_data": {"data_type": GObject.TYPE_UINT},
                 "order_data": {"data_type": GObject.TYPE_UINT, "default_sort_type": "ascending"},
-                "library_path_data": {"data_type": GObject.TYPE_STRING}
+                "library_path_data": {"data_type": GObject.TYPE_STRING},
+                "weight_data": {"data_type": Pango.Weight}
             }
         )
 
         self.popup_menu = PopupMenu(self.window.application, self.releases_list_view.widget)
         self.popup_menu.add_items(
-            ("#" + _("_Search for Release"), self.on_search_release)
+            ("#" + _("_Search for Release"), self.on_search_release),
+            ("#" + _("Search for _Catalogue Number"), self.on_search_catno)
         )
+
+        self.hide_owned_toggle.set_active(config.sections["discogs"]["hide_owned_releases"])
+        self.show_favourite_labels()
 
         for event_name, callback in (
             ("discogs-label-releases", self.label_releases),
@@ -135,6 +161,7 @@ class Discogs:
     def destroy(self):
 
         self.popup_menu.destroy()
+        self.labels_popup_menu.destroy()
         self.labels_list_view.destroy()
         self.releases_list_view.destroy()
 
@@ -177,26 +204,69 @@ class Discogs:
         self.library_label.set_tooltip_text("\n".join(core.discogs.get_library_folders()))
         self.rescan_library_button.set_sensitive(not core.discogs.is_scanning_library)
 
-    def get_library_values(self, artist, title, catno):
+    @staticmethod
+    def get_library_state(release):
+        """Return the library folder of a release, and whether it's likely
+        an earlier version of the release."""
 
-        library_path = core.discogs.find_in_library(artist, title, catno) or ""
-        icon_name = "object-select-symbolic" if library_path else ""
+        library_path = core.discogs.find_in_library(release.artist, release.title, release.catno) or ""
+        is_earlier_version = bool(library_path) and core.discogs.is_earlier_version(library_path, release.year)
 
-        return icon_name, library_path
+        return library_path, is_earlier_version
+
+    def is_release_hidden(self, release):
+
+        if not self.hide_owned_toggle.get_active():
+            return False
+
+        library_path, is_earlier_version = self.get_library_state(release)
+        return bool(library_path) and not is_earlier_version
+
+    def add_release_row(self, release, order):
+
+        library_path, is_earlier_version = self.get_library_state(release)
+
+        if not library_path:
+            icon_name = ""
+        elif is_earlier_version:
+            icon_name = "document-open-recent-symbolic"
+        else:
+            icon_name = "object-select-symbolic"
+
+        is_new = self.last_seen_release_id is not None and release.id > self.last_seen_release_id
+
+        self.releases_list_view.add_row([
+            icon_name,
+            str(release.year or ""),
+            release.artist,
+            release.title,
+            release.catno,
+            release.release_format,
+            release.id,
+            release.year or 0,
+            order,
+            library_path,
+            Pango.Weight.BOLD if is_new else Pango.Weight.NORMAL
+        ], select_row=False)
+
+    def show_releases(self):
+        """Fill the release list again, e.g. after the library changed."""
+
+        self.releases_list_view.clear()
+        self.releases_list_view.freeze()
+
+        for order, release in enumerate(self.releases.values()):
+            if not self.is_release_hidden(release):
+                self.add_release_row(release, order)
+
+        self.releases_list_view.unfreeze()
 
     def library_updated(self):
 
-        for iterator in self.releases_list_view.iterators.values():
-            artist, title, catno = (
-                self.releases_list_view.get_row_value(iterator, column_id) for column_id in ("artist", "title", "catno")
-            )
-            self.releases_list_view.set_row_values(
-                iterator, ("in_library", "library_path_data"), self.get_library_values(artist, title, catno)
-            )
-
         self.update_library_status()
 
-        if self.releases_list_view.iterators:
+        if self.releases:
+            self.show_releases()
             self.update_status()
 
     def request_releases(self, page_number):
@@ -209,11 +279,21 @@ class Discogs:
 
     def update_status(self):
 
-        num_releases = len(self.releases_list_view.iterators)
-        num_in_library = sum(
-            1 for iterator in self.releases_list_view.iterators.values()
-            if self.releases_list_view.get_row_value(iterator, "library_path_data")
-        )
+        num_releases = len(self.releases)
+        num_in_library = num_earlier_versions = num_new = 0
+
+        for release in self.releases.values():
+            library_path, is_earlier_version = self.get_library_state(release)
+
+            if is_earlier_version:
+                num_earlier_versions += 1
+
+            elif library_path:
+                num_in_library += 1
+
+            if self.last_seen_release_id is not None and release.id > self.last_seen_release_id:
+                num_new += 1
+
         has_more_pages = self.page_number < self.num_pages
 
         if not num_releases:
@@ -227,6 +307,16 @@ class Discogs:
 
         if num_in_library:
             status += ", " + _("%(num_releases)s in your library") % {"num_releases": humanize(num_in_library)}
+
+            if self.hide_owned_toggle.get_active():
+                status += " " + _("(hidden)")
+
+        if num_earlier_versions:
+            status += ", " + _("%(num_releases)s with an earlier version in your library") % {
+                "num_releases": humanize(num_earlier_versions)}
+
+        if num_new:
+            status += ", " + _("%(num_releases)s new since you last looked") % {"num_releases": humanize(num_new)}
 
         self.status_label.set_label(status)
         self.load_more_button.set_label(_("Load More"))
@@ -245,7 +335,7 @@ class Discogs:
         self.labels_list_view.freeze()
 
         for order, label in enumerate(labels):
-            self.labels_list_view.add_row([label.name, label.id, order], select_row=False)
+            self.add_label_row(label.id, label.name, order)
 
         self.labels_list_view.unfreeze()
 
@@ -269,28 +359,25 @@ class Discogs:
             return
 
         self.num_pages = num_pages
-        first_order = (page_number - 1) * core.discogs.RELEASES_PER_PAGE
-
         self.releases_list_view.freeze()
 
-        for index, release in enumerate(releases):
-            icon_name, library_path = self.get_library_values(release.artist, release.title, release.catno)
+        for release in releases:
+            if release.id in self.releases:
+                # Also on an earlier page
+                continue
 
-            # Releases that also appeared on an earlier page are skipped by add_row()
-            self.releases_list_view.add_row([
-                icon_name,
-                str(release.year or ""),
-                release.artist,
-                release.title,
-                release.catno,
-                release.release_format,
-                release.id,
-                release.year or 0,
-                first_order + index,
-                library_path
-            ], select_row=False)
+            order = len(self.releases)
+            self.releases[release.id] = release
+
+            if not self.is_release_hidden(release):
+                self.add_release_row(release, order)
 
         self.releases_list_view.unfreeze()
+
+        if releases:
+            core.discogs.set_last_seen_release_id(label_id, max(release.id for release in releases))
+            config.write_configuration()
+
         self.update_status()
 
     def on_search_labels(self, *_args):
@@ -298,14 +385,11 @@ class Discogs:
         query = self.search_entry.get_text().strip()
 
         if not query:
+            self.show_favourite_labels()
             return
 
         self.search_query = query
-        self.label_id = None
-        self.labels_list_view.clear()
-        self.releases_list_view.clear()
-        self.releases_label.set_label(_("Releases"))
-        self.load_more_button.set_visible(False)
+        self.clear_labels()
         self.status_label.set_label(_("Searching…"))
 
         core.discogs.request_label_search(query)
@@ -323,11 +407,84 @@ class Discogs:
 
         self.label_id = label_id
         self.num_pages = 0
+        self.releases.clear()
+        self.last_seen_release_id = core.discogs.get_last_seen_release_id(label_id)
 
         self.releases_list_view.clear()
         self.releases_label.set_label(list_view.get_row_value(iterator, "label"))
         self.load_more_button.set_visible(False)
         self.request_releases(page_number=1)
+
+    def clear_labels(self):
+
+        self.label_id = None
+        self.releases.clear()
+        self.labels_list_view.clear()
+        self.releases_list_view.clear()
+        self.releases_label.set_label(_("Releases"))
+        self.load_more_button.set_visible(False)
+
+    def add_label_row(self, label_id, name, order):
+
+        icon_name = "starred-symbolic" if core.discogs.is_favourite_label(label_id) else ""
+        self.labels_list_view.add_row([icon_name, name, label_id, order], select_row=False)
+
+    def show_favourite_labels(self):
+
+        self.search_query = None
+        self.clear_labels()
+
+        favourite_labels = config.sections["discogs"]["favourite_labels"]
+
+        for order, (label_id, name) in enumerate(favourite_labels):
+            self.add_label_row(label_id, name, order)
+
+        if favourite_labels:
+            self.status_label.set_label(_("Select a favourite label, or search for a label"))
+        else:
+            self.status_label.set_label(_("Search for a label, then select it to see its releases"))
+
+    def get_selected_label(self):
+
+        for iterator in self.labels_list_view.get_selected_rows():
+            return iterator
+
+        return None
+
+    def on_labels_popup_menu(self, menu, _widget):
+
+        iterator = self.get_selected_label()
+        label_id = self.labels_list_view.get_row_value(iterator, "id_data")
+
+        menu.actions[_("_Favourite Label")].set_state(
+            GLib.Variant.new_boolean(core.discogs.is_favourite_label(label_id)))
+
+    def on_favourite_label(self, action, state):
+
+        iterator = self.get_selected_label()
+
+        if iterator is None:
+            return
+
+        label_id = self.labels_list_view.get_row_value(iterator, "id_data")
+
+        if state.get_boolean():
+            core.discogs.add_favourite_label(label_id, self.labels_list_view.get_row_value(iterator, "label"))
+            self.labels_list_view.set_row_value(iterator, "favourite", "starred-symbolic")
+
+        else:
+            core.discogs.remove_favourite_label(label_id)
+            self.labels_list_view.set_row_value(iterator, "favourite", "")
+
+        action.set_state(state)
+
+    def on_hide_owned_toggled(self, *_args):
+
+        config.sections["discogs"]["hide_owned_releases"] = self.hide_owned_toggle.get_active()
+
+        if self.releases:
+            self.show_releases()
+            self.update_status()
 
     def on_load_more(self, *_args):
         self.request_releases(self.page_number + 1)
@@ -338,6 +495,9 @@ class Discogs:
 
         if not library_path:
             return None
+
+        if list_view.get_row_value(iterator, "in_library") == "document-open-recent-symbolic":
+            return _("Earlier version in library: %(path)s") % {"path": library_path}
 
         return _("In library: %(path)s") % {"path": library_path}
 
@@ -417,4 +577,21 @@ class Discogs:
 
             core.discogs.add_pending_release(artist, title, year, catno)
             core.search.do_search(core.discogs.get_search_term(artist, title), mode="global")
+            return
+
+    def on_search_catno(self, *_args):
+
+        for iterator in self.releases_list_view.get_selected_rows():
+            artist = self.releases_list_view.get_row_value(iterator, "artist")
+            title = self.releases_list_view.get_row_value(iterator, "title")
+            year = self.releases_list_view.get_row_value(iterator, "year_data")
+            catno = self.releases_list_view.get_row_value(iterator, "catno")
+            search_term = core.discogs.get_catno_search_term(catno)
+
+            if not search_term:
+                self.status_label.set_label(_("This release has no catalogue number"))
+                return
+
+            core.discogs.add_pending_release(artist, title, year, catno)
+            core.search.do_search(search_term, mode="global")
             return
