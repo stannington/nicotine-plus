@@ -79,6 +79,24 @@
               </object>
             </child>
             <child>
+              <object class="GtkButton" id="check_favourites_button">
+                <property name="tooltip-text" translatable="yes">Check Favourite Labels for New Releases</property>
+                <property name="valign">center</property>
+                <property name="visible">True</property>
+                <signal name="clicked" handler="on_check_favourite_labels"/>
+                <child>
+                  <object class="GtkImage">
+                    <property name="icon-name">starred-symbolic</property>
+                    <property name="visible">True</property>
+                  </object>
+                </child>
+                <style>
+                  <class name="circular"/>
+                  <class name="image-button"/>
+                </style>
+              </object>
+            </child>
+            <child>
               <object class="GtkButton" id="folder_name_button">
                 <property name="tooltip-text" translatable="yes">Downloaded Folder Name</property>
                 <property name="valign">center</property>

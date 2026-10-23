@@ -161,6 +161,62 @@ class DiscogsTest(TestCase):
         self.assertEqual((label_id, page, num_pages, releases), (1001, 1, 0, []))
         self.assertIn("429", error_message)
 
+    def test_check_favourite_labels(self, mock_urlopen):
+
+        self.set_response(mock_urlopen, LABEL_RELEASES_FILE_PATH)
+        config.sections["discogs"]["favourite_labels"] = [[1001, "A"], [1002, "B"], [1003, "C"]]
+        config.sections["discogs"]["last_seen_releases"] = {1001: 9002, 1002: 9003}
+
+        with patch("pynicotine.discogs.Discogs._start_thread") as mock_start_thread:
+            core.discogs.request_favourite_labels_check()
+
+        self.assertTrue(core.discogs.is_checking_favourite_labels)
+        _target, label_ids, token, _delay = mock_start_thread.call_args.args
+        self.assertEqual(label_ids, [1001, 1002, 1003])
+
+        with patch("pynicotine.events.Events.invoke_main_thread", side_effect=lambda func, *args: func(*args)), \
+                patch("pynicotine.discogs.time.sleep") as mock_sleep, \
+                patch("pynicotine.events.Events.emit") as mock_emit:
+            core.discogs._check_favourite_labels(label_ids, token, 0)
+
+        self.assertEqual(mock_sleep.call_count, 2)
+        self.assertEqual([call.args for call in mock_emit.call_args_list], [
+            ("discogs-favourite-label-checked", 1001, True),
+            ("discogs-favourite-label-checked", 1002, False),
+            # Never viewed, so nothing counts as new
+            ("discogs-favourite-label-checked", 1003, False),
+            ("discogs-favourite-labels-checked",)
+        ])
+        self.assertEqual(core.discogs.labels_with_new_releases, {1001})
+        self.assertFalse(core.discogs.is_checking_favourite_labels)
+
+        # Viewing the label's newest releases clears the mark
+        core.discogs.set_last_seen_release_id(1001, 9003)
+        self.assertEqual(core.discogs.labels_with_new_releases, set())
+
+    def test_check_favourite_labels_error(self, mock_urlopen):
+        """A failed request skips the label, and the check continues."""
+
+        error = HTTPError(url="", code=429, msg="Too Many Requests", hdrs=None, fp=io.BytesIO())
+        self.addCleanup(error.close)
+        mock_urlopen.side_effect = error
+
+        with patch("pynicotine.events.Events.invoke_main_thread", side_effect=lambda func, *args: func(*args)), \
+                patch("pynicotine.discogs.time.sleep"), \
+                patch("pynicotine.events.Events.emit") as mock_emit:
+            core.discogs._check_favourite_labels([1001, 1002], "", 0)
+
+        self.assertEqual([call.args for call in mock_emit.call_args_list], [("discogs-favourite-labels-checked",)])
+
+    def test_check_without_favourite_labels(self, _mock_urlopen):
+
+        config.sections["discogs"]["favourite_labels"] = []
+
+        with patch("pynicotine.discogs.Discogs._start_thread") as mock_start_thread:
+            core.discogs.request_favourite_labels_check()
+
+        mock_start_thread.assert_not_called()
+
     def test_get_search_term(self, _mock_urlopen):
 
         for (artist, title), search_term in (

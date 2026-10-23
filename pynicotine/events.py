@@ -93,6 +93,8 @@ EVENT_NAMES = {
     "user-left-room",
 
     # Discogs
+    "discogs-favourite-label-checked",
+    "discogs-favourite-labels-checked",
     "discogs-label-releases",
     "discogs-label-search",
     "discogs-library-updated",

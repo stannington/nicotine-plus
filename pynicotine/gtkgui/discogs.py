@@ -28,6 +28,7 @@ class Discogs:
     def __init__(self, window):
 
         (
+            self.check_favourites_button,
             self.container,
             self.folder_name_button,
             self.hide_owned_toggle,
@@ -80,6 +81,13 @@ class Discogs:
                     "title": _("Favourite"),
                     "width": 25,
                     "hide_header": True
+                },
+                "new": {
+                    "column_type": "text",
+                    "title": _("New Releases"),
+                    "width": 20,
+                    "hide_header": True,
+                    "tooltip_callback": self.on_new_releases_tooltip
                 },
                 "label": {
                     "column_type": "text",
@@ -160,8 +168,14 @@ class Discogs:
 
         self.hide_owned_toggle.set_active(config.sections["discogs"]["hide_owned_releases"])
         self.show_favourite_labels()
+        self.update_check_favourites_button()
+
+        # Status shown when a check started from the button finishes
+        self.should_show_check_result = False
 
         for event_name, callback in (
+            ("discogs-favourite-label-checked", self.favourite_label_checked),
+            ("discogs-favourite-labels-checked", self.favourite_labels_checked),
             ("discogs-label-releases", self.label_releases),
             ("discogs-label-search", self.label_search),
             ("discogs-library-updated", self.library_updated)
@@ -397,6 +411,7 @@ class Discogs:
         if releases:
             core.discogs.set_last_seen_release_id(label_id, max(release.id for release in releases))
             config.write_configuration()
+            self.update_new_releases_mark(label_id)
 
         self.update_status()
 
@@ -450,7 +465,65 @@ class Discogs:
     def add_label_row(self, label_id, name, order):
 
         icon_name = "starred-symbolic" if core.discogs.is_favourite_label(label_id) else ""
-        self.labels_list_view.add_row([icon_name, name, label_id, order], select_row=False)
+        new_text = "!" if label_id in core.discogs.labels_with_new_releases else ""
+
+        self.labels_list_view.add_row([icon_name, new_text, name, label_id, order], select_row=False)
+
+    def update_new_releases_mark(self, label_id):
+
+        iterator = self.labels_list_view.iterators.get(label_id)
+
+        if iterator is not None:
+            new_text = "!" if label_id in core.discogs.labels_with_new_releases else ""
+            self.labels_list_view.set_row_value(iterator, "new", new_text)
+
+    def update_check_favourites_button(self):
+        self.check_favourites_button.set_sensitive(not core.discogs.is_checking_favourite_labels)
+
+    def favourite_label_checked(self, label_id, _has_new_releases):
+        self.update_new_releases_mark(label_id)
+
+    def favourite_labels_checked(self):
+
+        self.update_check_favourites_button()
+
+        if not self.should_show_check_result:
+            return
+
+        self.should_show_check_result = False
+
+        if self.label_id is not None:
+            # Show the status of the selected label's releases again
+            if self.releases:
+                self.update_status()
+            return
+
+        favourite_label_ids = {label_id for label_id, _name in config.sections["discogs"]["favourite_labels"]}
+        num_labels = len(favourite_label_ids & core.discogs.labels_with_new_releases)
+
+        if num_labels:
+            self.status_label.set_label(_("%(num_labels)s favourite labels have new releases") % {
+                "num_labels": humanize(num_labels)})
+        else:
+            self.status_label.set_label(_("No new releases on your favourite labels"))
+
+    def on_check_favourite_labels(self, *_args):
+
+        if not config.sections["discogs"]["favourite_labels"]:
+            self.status_label.set_label(_("Add a favourite label first, from the right-click menu of a label"))
+            return
+
+        self.should_show_check_result = True
+        core.discogs.request_favourite_labels_check()
+        self.update_check_favourites_button()
+        self.status_label.set_label(_("Checking favourite labels for new releases…"))
+
+    def on_new_releases_tooltip(self, list_view, iterator):
+
+        if not list_view.get_row_value(iterator, "new"):
+            return None
+
+        return _("New releases since you last looked")
 
     def show_favourite_labels(self):
 

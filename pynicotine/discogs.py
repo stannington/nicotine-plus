@@ -6,6 +6,7 @@ import os
 import re
 import string
 import threading
+import time
 
 from urllib.parse import quote
 from urllib.parse import urlencode
@@ -247,12 +248,18 @@ class Discogs:
     a personal access token).
     """
 
-    __slots__ = ("library", "is_scanning_library", "_should_rescan_library")
+    __slots__ = ("library", "is_scanning_library", "is_checking_favourite_labels",
+                 "labels_with_new_releases", "_should_rescan_library")
 
     API_URL = "https://api.discogs.com"
     MAX_LABEL_RESULTS = 50
     RELEASES_PER_PAGE = 100  # Maximum allowed by Discogs
     TIMEOUT = 10
+
+    # Seconds between requests when checking favourite labels, to leave room
+    # in the rate limit for browsing the tab meanwhile
+    CHECK_DELAY = 1.5
+    CHECK_DELAY_WITHOUT_TOKEN = 3
 
     # Number Discogs adds to tell apart artists with the same name, e.g. "Calibre (2)"
     ARTIST_NUMBER_PATTERN = re.compile(r"\s*\(\d+\)")
@@ -277,13 +284,22 @@ class Discogs:
 
         self.library = None
         self.is_scanning_library = False
+        self.is_checking_favourite_labels = False
+        self.labels_with_new_releases = set()
         self._should_rescan_library = False
 
         if config.sections["discogs"]["folder_name_pattern"] == self.OLD_DEFAULT_FOLDER_NAME_PATTERN:
             # Upgrade the previous default pattern to the new one with a label folder
             config.sections["discogs"]["folder_name_pattern"] = config.defaults["discogs"]["folder_name_pattern"]
 
-        events.connect("folder-download-finished", self._folder_download_finished)
+        for event_name, callback in (
+            ("folder-download-finished", self._folder_download_finished),
+            ("start", self._start)
+        ):
+            events.connect(event_name, callback)
+
+    def _start(self):
+        self.request_favourite_labels_check()
 
     def _folder_download_finished(self, folder_path):
 
@@ -350,6 +366,64 @@ class Discogs:
 
         if release_id > last_seen_releases.get(label_id, 0):
             last_seen_releases[label_id] = release_id
+
+        # The newest releases were just seen
+        self.labels_with_new_releases.discard(label_id)
+
+    def request_favourite_labels_check(self):
+        """Check each favourite label for releases added since it was last
+        viewed, in the background. Emits "discogs-favourite-label-checked"
+        with the label id and whether it has new releases, for each label,
+        then "discogs-favourite-labels-checked" when done.
+
+        Only the newest page of releases is checked, one label at a time, to
+        stay within the rate limit.
+        """
+
+        favourite_label_ids = [label_id for label_id, _name in config.sections["discogs"]["favourite_labels"]]
+
+        if self.is_checking_favourite_labels or not favourite_label_ids:
+            return
+
+        token = self._get_token()
+        delay = self.CHECK_DELAY if token else self.CHECK_DELAY_WITHOUT_TOKEN
+
+        self.is_checking_favourite_labels = True
+        self._start_thread(self._check_favourite_labels, favourite_label_ids, token, delay)
+
+    def _check_favourite_labels(self, label_ids, token, delay):
+
+        for index, label_id in enumerate(label_ids):
+            if index:
+                time.sleep(delay)
+
+            try:
+                _num_pages, releases = self.get_label_releases(label_id, token=token)
+
+            except Exception as error:
+                log.add_debug("Unable to check Discogs label %s for new releases: %s", (label_id, error))
+                continue
+
+            events.invoke_main_thread(self._favourite_label_checked, label_id, releases)
+
+        events.invoke_main_thread(self._favourite_labels_checked)
+
+    def _favourite_label_checked(self, label_id, releases):
+
+        # Compared on the main thread, in case the label was viewed meanwhile
+        last_seen_release_id = self.get_last_seen_release_id(label_id)
+        has_new_releases = any(group.is_new(last_seen_release_id) for group in self.group_releases(releases))
+
+        if has_new_releases:
+            self.labels_with_new_releases.add(label_id)
+        else:
+            self.labels_with_new_releases.discard(label_id)
+
+        events.emit("discogs-favourite-label-checked", label_id, has_new_releases)
+
+    def _favourite_labels_checked(self):
+        self.is_checking_favourite_labels = False
+        events.emit("discogs-favourite-labels-checked")
 
     def add_pending_release(self, artist, title, year, catno, label=""):
         """Remember a release searched for from the Discogs tab, so that its
