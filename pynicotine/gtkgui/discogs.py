@@ -676,6 +676,11 @@ class Discogs:
         config.sections["discogs"]["folder_name_pattern"] = dialog.get_entry_value().strip()
         config.write_configuration()
 
+    def get_tracklist_release_id(self, iterator):
+
+        group = self.release_groups.get(self.releases_list_view.get_row_value(iterator, "id_data"))
+        return group.tracklist_release.id if group is not None else 0
+
     def on_search_release(self, *_args):
 
         for iterator in self.releases_list_view.get_selected_rows():
@@ -684,7 +689,8 @@ class Discogs:
             year = self.releases_list_view.get_row_value(iterator, "year_data")
             catno = self.releases_list_view.get_row_value(iterator, "catno")
 
-            core.discogs.add_pending_release(artist, title, year, catno, self.label_name)
+            core.discogs.add_pending_release(
+                artist, title, year, catno, self.label_name, self.get_tracklist_release_id(iterator))
             core.search.do_search(core.discogs.get_search_term(artist, title), mode="global")
             return
 
@@ -701,6 +707,7 @@ class Discogs:
                 self.status_label.set_label(_("This release has no catalogue number"))
                 return
 
-            core.discogs.add_pending_release(artist, title, year, catno, self.label_name)
+            core.discogs.add_pending_release(
+                artist, title, year, catno, self.label_name, self.get_tracklist_release_id(iterator))
             core.search.do_search(search_term, mode="global")
             return

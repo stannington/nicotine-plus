@@ -464,8 +464,9 @@ class FolderRenameTest(TestCase):
 
         self.assertTrue(os.path.isdir(new_folder_path))
         self.assertFalse(os.path.exists(folder_path))
-        self.assertEqual(
-            config.sections["discogs"]["pending_releases"], [["Other Artist", "Unrelated Release", 2020, "OTH001", ""]])
+        self.assertEqual(config.sections["discogs"]["pending_releases"], [
+            ["Other Artist", "Unrelated Release", 2020, "OTH001", "", 0]
+        ])
 
     def test_upgrade_old_default_pattern(self):
 
@@ -635,6 +636,10 @@ class DiscogsFeaturesTest(TestCase):
         self.assertEqual(all_my_life.year, 2026)
         self.assertEqual(all_my_life.catno, "METALP031")
         self.assertEqual(all_my_life.release_format, "LP, Album, FLAC, 16b, TP")
+
+        # Downloaded files are tagged using the digital version's tracklist
+        self.assertEqual(all_my_life.tracklist_release.id, 12)
+        self.assertEqual(timeless.tracklist_release.id, 18)
 
         # Extra spaces don't matter, and the most common catalogue number comes first
         self.assertEqual([release.id for release in damocles.releases], [13, 15, 16])

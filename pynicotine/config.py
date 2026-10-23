@@ -412,6 +412,8 @@ class Config:
                 "token": "",
                 "library_folders": [],
                 "folder_name_pattern": "$label/$year $catno $artist - $title",
+                "file_name_pattern": "$track $artist - $title",
+                "tag_files": True,
                 "pending_releases": [],
                 "favourite_labels": [],
                 "last_seen_releases": {},

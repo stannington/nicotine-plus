@@ -14,6 +14,7 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 import pynicotine
+from pynicotine import discogsfiles
 from pynicotine.config import config
 from pynicotine.events import events
 from pynicotine.logfacility import log
@@ -114,6 +115,24 @@ class DiscogsReleaseGroup:
             return "File"
 
         return ", ".join(format_names.values())
+
+    @property
+    def tracklist_release(self):
+        """The format whose tracklist matches downloaded files best: the
+        FLAC or MP3 version if there is one, since vinyl tracklists can
+        differ from digital ones."""
+
+        for wanted_format_name in ("FLAC", "MP3", "File"):
+            for release in self.releases:
+                format_names = {
+                    self.QUANTITY_PATTERN.sub("", format_name.strip())
+                    for format_name in release.release_format.split(",")
+                }
+
+                if wanted_format_name in format_names:
+                    return release
+
+        return self.releases[0]
 
     def is_new(self, last_seen_release_id):
         """Check if all formats were added since the label was last viewed,
@@ -255,6 +274,7 @@ class Discogs:
     MAX_LABEL_RESULTS = 50
     RELEASES_PER_PAGE = 100  # Maximum allowed by Discogs
     TIMEOUT = 10
+    MAX_IMAGE_SIZE = 10_000_000
 
     # Seconds between requests when checking favourite labels, to leave room
     # in the rate limit for browsing the tab meanwhile
@@ -303,7 +323,10 @@ class Discogs:
 
     def _folder_download_finished(self, folder_path):
 
-        folder_path = self._rename_downloaded_folder(folder_path)
+        release = self._find_downloaded_release(folder_path)
+
+        if release is not None:
+            folder_path = self._process_downloaded_release(folder_path, release)
 
         if self.library is None:
             return
@@ -425,12 +448,14 @@ class Discogs:
         self.is_checking_favourite_labels = False
         events.emit("discogs-favourite-labels-checked")
 
-    def add_pending_release(self, artist, title, year, catno, label=""):
+    def add_pending_release(self, artist, title, year, catno, label="", release_id=0):
         """Remember a release searched for from the Discogs tab, so that its
-        folder can be renamed once it's downloaded."""
+        folder can be renamed once it's downloaded. The release id is the
+        Discogs release whose tracklist is used to tag and rename the
+        files."""
 
         pending_releases = config.sections["discogs"]["pending_releases"]
-        release = [artist, title, year or 0, catno, label]
+        release = [artist, title, year or 0, catno, label, release_id or 0]
 
         if release in pending_releases:
             pending_releases.remove(release)
@@ -494,7 +519,7 @@ class Discogs:
 
         # Most recently searched first
         for release in reversed(config.sections["discogs"]["pending_releases"]):
-            artist, title, _year, catno, *_label = release
+            artist, title, _year, catno, *_rest = release
             title_words = LibraryIndex.get_significant_words(title)
 
             if title_words and title_words <= words:
@@ -519,39 +544,67 @@ class Discogs:
         return (config.sections["transfers"]["usernamesubfolders"]
                 and os.path.dirname(parent_folder_path) == download_folder_path)
 
-    def _rename_downloaded_folder(self, folder_path):
-        """Rename a downloaded folder of a release searched for from the
-        Discogs tab, using the folder name pattern. Return the new path, or
-        the old path if the folder was not renamed."""
+    def _find_downloaded_release(self, folder_path):
+        """Return the pending release a downloaded folder contains, or None."""
 
-        pattern = config.sections["discogs"]["folder_name_pattern"].strip()
-
-        if not pattern or not config.sections["discogs"]["pending_releases"]:
-            return folder_path
+        if not config.sections["discogs"]["pending_releases"]:
+            return None
 
         if not self._is_top_download_folder(folder_path):
-            return folder_path
+            return None
 
-        release = self._find_pending_release(folder_path)
+        return self._find_pending_release(folder_path)
 
-        if release is None:
-            return folder_path
+    def _process_downloaded_release(self, folder_path, release):
+        """Rename the downloaded folder of a release searched for from the
+        Discogs tab, then tag and rename its files in the background. Return
+        the new folder path."""
 
-        folder_name = self.get_folder_name(pattern, *release)
+        is_handled = False
+
+        if config.sections["discogs"]["folder_name_pattern"].strip():
+            new_folder_path = self._rename_downloaded_folder(folder_path, release)
+
+            if new_folder_path is not None:
+                folder_path = new_folder_path
+                is_handled = True
+
+        # Releases searched for before tagging was added have no release id
+        release_id = release[5] if len(release) > 5 else 0
+        file_name_pattern = config.sections["discogs"]["file_name_pattern"].strip()
+        should_tag = config.sections["discogs"]["tag_files"]
+
+        if release_id and (file_name_pattern or should_tag):
+            self._start_thread(
+                self._process_downloaded_files, folder_path, release_id, file_name_pattern, should_tag,
+                self._get_token()
+            )
+            is_handled = True
+
+        if is_handled:
+            config.sections["discogs"]["pending_releases"].remove(release)
+
+        return folder_path
+
+    def _rename_downloaded_folder(self, folder_path, release):
+        """Rename a downloaded folder using the folder name pattern. Return
+        the new path, or None if the folder could not be renamed."""
+
+        pattern = config.sections["discogs"]["folder_name_pattern"].strip()
+        folder_name = self.get_folder_name(pattern, *release[:5])
 
         if not folder_name:
-            return folder_path
+            return None
 
         new_folder_path = os.path.join(os.path.dirname(folder_path), folder_name)
 
         if new_folder_path == folder_path:
-            config.sections["discogs"]["pending_releases"].remove(release)
             return folder_path
 
         if os.path.exists(encode_path(new_folder_path)):
             log.add(_("Cannot rename downloaded folder %(old)s to %(new)s: a folder with that name already "
                       "exists"), {"old": folder_path, "new": folder_name})
-            return folder_path
+            return None
 
         try:
             # Create the label folder, if the pattern has one
@@ -561,12 +614,71 @@ class Discogs:
         except OSError as error:
             log.add(_("Cannot rename downloaded folder %(old)s to %(new)s: %(error)s"), {
                 "old": folder_path, "new": folder_name, "error": error})
-            return folder_path
+            return None
 
-        config.sections["discogs"]["pending_releases"].remove(release)
         log.add(_("Renamed downloaded folder %(old)s to %(new)s"), {"old": folder_path, "new": folder_name})
-
         return new_folder_path
+
+    def _process_downloaded_files(self, folder_path, release_id, file_name_pattern, should_tag, token):
+
+        result = None
+        error_message = None
+
+        try:
+            release_data = self._request(f"/releases/{quote(str(release_id))}", {}, token)
+            cover_url = discogsfiles.get_cover_url(release_data)
+            cover = self._download_image(cover_url) if cover_url else None
+            result = discogsfiles.process_folder(folder_path, release_data, cover, file_name_pattern, should_tag)
+
+        except Exception as error:
+            log.add_debug("Unable to process downloaded files of Discogs release %s: %s", (release_id, error))
+            error_message = str(error)
+
+        events.invoke_main_thread(self._downloaded_files_processed, folder_path, should_tag, result, error_message)
+
+    def _download_image(self, url):
+        """Return the image data and mime type, or None if it couldn't be
+        downloaded."""
+
+        request = Request(url, headers={"User-Agent": self._get_user_agent()})
+
+        try:
+            with urlopen(request, timeout=self.TIMEOUT) as response:
+                mime_type = response.headers.get_content_type()
+                data = response.read(self.MAX_IMAGE_SIZE + 1)
+
+        except Exception as error:
+            log.add_debug("Unable to download Discogs image %s: %s", (url, error))
+            return None
+
+        if len(data) > self.MAX_IMAGE_SIZE or mime_type not in {"image/jpeg", "image/png"}:
+            return None
+
+        return data, mime_type
+
+    @staticmethod
+    def _downloaded_files_processed(folder_path, should_tag, result, error_message):
+
+        if error_message:
+            log.add(_("Cannot tag and rename files in %(folder)s: %(error)s"), {
+                "folder": folder_path, "error": error_message})
+            return
+
+        if should_tag and not discogsfiles.HAS_MUTAGEN:
+            log.add(_("Cannot tag files in %(folder)s: install the mutagen Python module to tag files"), {
+                "folder": folder_path})
+
+        log.add(_("Tagged %(num_tagged)s and renamed %(num_renamed)s of %(num_files)s files in %(folder)s"), {
+            "num_tagged": result.num_tagged, "num_renamed": result.num_renamed, "num_files": result.num_files,
+            "folder": folder_path})
+
+        if result.unmatched_file_names:
+            log.add(_("Files not found in the Discogs tracklist, left unchanged: %(files)s"), {
+                "files": ", ".join(result.unmatched_file_names)})
+
+        for error in result.errors:
+            log.add(_("Problem tagging or renaming files in %(folder)s: %(error)s"), {
+                "folder": folder_path, "error": error})
 
     def get_library_folders(self):
         """Folders to scan: the chosen library folders and the download
@@ -861,12 +973,14 @@ class Discogs:
 
         return data["pagination"]["pages"], releases
 
+    @staticmethod
+    def _get_user_agent():
+        return f"{pynicotine.__application_name__}/{pynicotine.__version__} +{pynicotine.__website_url__}"
+
     def _request(self, path, params, token):
 
-        headers = {
-            "User-Agent": f"{pynicotine.__application_name__}/{pynicotine.__version__} "
-                          f"+{pynicotine.__website_url__}"
-        }
+        headers = {"User-Agent": self._get_user_agent()}
+
         if token:
             headers["Authorization"] = f"Discogs token={token}"
 
