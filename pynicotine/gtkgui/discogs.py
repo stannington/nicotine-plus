@@ -19,6 +19,12 @@ from pynicotine.utils import humanize
 
 class Discogs:
 
+    # Release list columns set when updating a row, in the order of the columns
+    RELEASE_ROW_COLUMNS = (
+        "in_library", "year", "artist", "title", "catno", "format",
+        "year_data", "order_data", "library_path_data", "weight_data"
+    )
+
     def __init__(self, window):
 
         (
@@ -58,8 +64,10 @@ class Discogs:
         self.page_number = 0
         self.num_pages = 0
 
-        # All loaded releases of the selected label, including hidden ones
+        # All loaded releases of the selected label, including hidden ones,
+        # and the same releases with the formats of each release grouped
         self.releases = {}
+        self.release_groups = {}
         self.last_seen_release_id = None
 
         self.labels_list_view = TreeView(
@@ -131,7 +139,8 @@ class Discogs:
                     "column_type": "text",
                     "title": _("Format"),
                     "width": 160,
-                    "expand_column": True
+                    "expand_column": True,
+                    "tooltip_callback": self.on_format_tooltip
                 },
 
                 # Hidden data columns
@@ -223,7 +232,7 @@ class Discogs:
         library_path, is_earlier_version = self.get_library_state(release)
         return bool(library_path) and not is_earlier_version
 
-    def add_release_row(self, release, order):
+    def get_release_row_values(self, release, order):
 
         library_path, is_earlier_version = self.get_library_state(release)
 
@@ -234,31 +243,49 @@ class Discogs:
         else:
             icon_name = "object-select-symbolic"
 
-        is_new = self.last_seen_release_id is not None and release.id > self.last_seen_release_id
-
-        self.releases_list_view.add_row([
+        return [
             icon_name,
             str(release.year or ""),
             release.artist,
             release.title,
             release.catno,
             release.release_format,
-            release.id,
             release.year or 0,
             order,
             library_path,
-            Pango.Weight.BOLD if is_new else Pango.Weight.NORMAL
-        ], select_row=False)
+            Pango.Weight.BOLD if release.is_new(self.last_seen_release_id) else Pango.Weight.NORMAL
+        ]
 
     def show_releases(self):
-        """Fill the release list again, e.g. after the library changed."""
+        """Update the release list, e.g. after more releases were loaded or
+        the library changed. Existing rows are updated rather than added
+        again, so that the list keeps its scroll position."""
 
-        self.releases_list_view.clear()
+        groups = core.discogs.group_releases(self.releases.values())
+        self.release_groups = {group.id: group for group in groups}
+
+        visible_groups = {}
+
+        for order, group in enumerate(groups):
+            if not self.is_release_hidden(group):
+                visible_groups[group.id] = (group, order)
+
         self.releases_list_view.freeze()
 
-        for order, release in enumerate(self.releases.values()):
-            if not self.is_release_hidden(release):
-                self.add_release_row(release, order)
+        for group_id, iterator in list(self.releases_list_view.iterators.items()):
+            if group_id not in visible_groups:
+                self.releases_list_view.remove_row(iterator)
+
+        for group_id, (group, order) in visible_groups.items():
+            values = self.get_release_row_values(group, order)
+            iterator = self.releases_list_view.iterators.get(group_id)
+
+            if iterator is not None:
+                self.releases_list_view.set_row_values(iterator, self.RELEASE_ROW_COLUMNS, values)
+                continue
+
+            # The id column comes after the visible columns
+            self.releases_list_view.add_row(values[:6] + [group_id] + values[6:], select_row=False)
 
         self.releases_list_view.unfreeze()
 
@@ -280,10 +307,10 @@ class Discogs:
 
     def update_status(self):
 
-        num_releases = len(self.releases)
+        num_releases = len(self.release_groups)
         num_in_library = num_earlier_versions = num_new = 0
 
-        for release in self.releases.values():
+        for release in self.release_groups.values():
             library_path, is_earlier_version = self.get_library_state(release)
 
             if is_earlier_version:
@@ -292,7 +319,7 @@ class Discogs:
             elif library_path:
                 num_in_library += 1
 
-            if self.last_seen_release_id is not None and release.id > self.last_seen_release_id:
+            if release.is_new(self.last_seen_release_id):
                 num_new += 1
 
         has_more_pages = self.page_number < self.num_pages
@@ -360,20 +387,12 @@ class Discogs:
             return
 
         self.num_pages = num_pages
-        self.releases_list_view.freeze()
 
         for release in releases:
-            if release.id in self.releases:
-                # Also on an earlier page
-                continue
+            # Releases also on an earlier page keep their place
+            self.releases.setdefault(release.id, release)
 
-            order = len(self.releases)
-            self.releases[release.id] = release
-
-            if not self.is_release_hidden(release):
-                self.add_release_row(release, order)
-
-        self.releases_list_view.unfreeze()
+        self.show_releases()
 
         if releases:
             core.discogs.set_last_seen_release_id(label_id, max(release.id for release in releases))
@@ -409,6 +428,7 @@ class Discogs:
         self.label_id = label_id
         self.num_pages = 0
         self.releases.clear()
+        self.release_groups.clear()
         self.last_seen_release_id = core.discogs.get_last_seen_release_id(label_id)
 
         self.releases_list_view.clear()
@@ -421,6 +441,7 @@ class Discogs:
 
         self.label_id = None
         self.releases.clear()
+        self.release_groups.clear()
         self.labels_list_view.clear()
         self.releases_list_view.clear()
         self.releases_label.set_label(_("Releases"))
@@ -502,6 +523,18 @@ class Discogs:
             return _("Earlier version in library: %(path)s") % {"path": library_path}
 
         return _("In library: %(path)s") % {"path": library_path}
+
+    def on_format_tooltip(self, list_view, iterator):
+
+        group = self.release_groups.get(list_view.get_row_value(iterator, "id_data"))
+
+        if group is None or len(group.releases) < 2:
+            return None
+
+        return "\n".join(
+            " · ".join(str(value) for value in (release.year, release.catno, release.release_format) if value)
+            for release in group.releases
+        )
 
     def on_choose_library_folders(self, *_args):
 

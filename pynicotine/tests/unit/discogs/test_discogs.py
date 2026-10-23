@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from pynicotine.config import config
 from pynicotine.core import core
+from pynicotine.discogs import DiscogsRelease
 from pynicotine.discogs import LibraryIndex
 
 CURRENT_FOLDER_PATH = os.path.dirname(os.path.realpath(__file__))
@@ -542,3 +543,70 @@ class DiscogsFeaturesTest(TestCase):
         core.discogs.set_last_seen_release_id(1, 300)
 
         self.assertEqual(core.discogs.get_last_seen_release_id(1), 500)
+
+    def test_group_releases(self):
+
+        # Newest first, as Discogs returns them
+        releases = [
+            DiscogsRelease(10, "Rufige Kru", "Terminator EP", 2026, "METAT1000", '2x12", EP, RE, RM, 180'),
+            DiscogsRelease(11, "HLZ", "All My Life", 2026, "METALP031", "LP, Album"),
+            DiscogsRelease(12, "HLZ", "All My Life", 2026, "METALP031", "16xFile, FLAC, Album, 16b"),
+            DiscogsRelease(13, "Kolectiv", "Damocles EP ", 2025, "META109", "12\", W/Lbl"),
+            DiscogsRelease(14, "Rufige Kru", "Terminator EP", 2025, "METAT 1000", "5xFile, FLAC, EP, RM"),
+            DiscogsRelease(15, "Kolectiv", "Damocles EP", 2025, "META109D", "12\""),
+            DiscogsRelease(16, "Kolectiv", "Damocles EP", 2025, "META109", "2xFile, FLAC"),
+            DiscogsRelease(17, "Goldie", "Timeless", 2025, "LMS1725581, none", "2xLP, Album, RE, RM"),
+            DiscogsRelease(18, "Goldie", "Timeless", 1995, "828 614-2", "2xCD, Album"),
+            DiscogsRelease(19, "HLZ", "All My Life", None, "none", "LP, Album, TP")
+        ]
+
+        groups = core.discogs.group_releases(releases)
+        # Sorted by the earliest year of the formats
+        # pylint: disable=unbalanced-tuple-unpacking
+        all_my_life, terminator, damocles, timeless_reissue, timeless = groups
+
+        self.assertEqual(len(groups), 5)
+
+        # Formats with different years, the earliest one is shown
+        self.assertEqual([release.id for release in terminator.releases], [10, 14])
+        self.assertEqual(terminator.id, 10)
+        self.assertEqual(terminator.year, 2025)
+        self.assertEqual(terminator.catno, "METAT1000")
+        self.assertEqual(terminator.release_format, '12", EP, RE, RM, 180, FLAC')
+
+        # A test pressing without a year joins the only version of the release
+        self.assertEqual([release.id for release in all_my_life.releases], [11, 12, 19])
+        self.assertEqual(all_my_life.year, 2026)
+        self.assertEqual(all_my_life.catno, "METALP031")
+        self.assertEqual(all_my_life.release_format, "LP, Album, FLAC, 16b, TP")
+
+        # Extra spaces don't matter, and the most common catalogue number comes first
+        self.assertEqual([release.id for release in damocles.releases], [13, 15, 16])
+        self.assertEqual(damocles.catno, "META109, META109D")
+
+        # Reissues years later are separate
+        self.assertEqual([release.id for release in timeless_reissue.releases], [17])
+        self.assertEqual(timeless_reissue.catno, "LMS1725581")
+        self.assertEqual([release.id for release in timeless.releases], [18])
+
+        # Only brand new releases count as new, not new formats of a release
+        self.assertTrue(damocles.is_new(12))
+        self.assertFalse(damocles.is_new(13))
+        self.assertFalse(damocles.is_new(None))
+
+    def test_group_releases_unknown_year(self):
+
+        releases = [
+            DiscogsRelease(1, "Goldie", "Timeless", 2025, "LMS1725581", "2xLP"),
+            DiscogsRelease(2, "Goldie", "Timeless", 1995, "828 614-2", "2xCD"),
+            DiscogsRelease(3, "Goldie", "Timeless", None, "none", "LP, TP"),
+            DiscogsRelease(4, "Goldie", "Promo", None, "none", "File, MP3")
+        ]
+
+        groups = core.discogs.group_releases(releases)
+
+        # Unclear which version it belongs to, so kept separate, last
+        self.assertEqual([[release.id for release in group.releases] for group in groups], [[1], [2], [3], [4]])
+        self.assertIsNone(groups[2].year)
+        self.assertEqual(groups[3].release_format, "MP3")
+        self.assertEqual(groups[0].release_format, "LP")

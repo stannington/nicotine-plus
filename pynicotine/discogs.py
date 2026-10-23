@@ -40,6 +40,90 @@ class DiscogsRelease:
         self.release_format = release_format
 
 
+class DiscogsReleaseGroup:
+    """Formats of the same release, e.g. the vinyl, FLAC and WAV versions,
+    shown as one row. Has the same attributes as DiscogsRelease."""
+
+    __slots__ = ("releases",)
+
+    QUANTITY_PATTERN = re.compile(r"^\d+x")  # "2x12"" or "16xFile"
+
+    def __init__(self, releases):
+        self.releases = releases
+
+    @property
+    def id(self):
+        # The first release stays first when more pages are loaded, so the id doesn't change
+        return self.releases[0].id
+
+    @property
+    def artist(self):
+        return self.releases[0].artist
+
+    @property
+    def title(self):
+        return self.releases[0].title
+
+    @property
+    def year(self):
+        """The earliest year of the formats."""
+        return min((release.year for release in self.releases if release.year), default=None)
+
+    @property
+    def catno(self):
+        """All catalogue numbers, the most common one first. Formats often
+        share one, written differently, e.g. "META 111" and "META111"."""
+
+        catnos = {}
+
+        for release in self.releases:
+            for catno in release.catno.split(","):
+                catno = catno.strip()
+                key = Discogs.CATNO_SEPARATOR_PATTERN.sub("", catno).lower()
+
+                if not key:
+                    continue
+
+                if key in catnos:
+                    catnos[key][1] += 1
+                else:
+                    catnos[key] = [catno, 1]
+
+        if len(catnos) > 1:
+            # Discogs uses "none" for releases without a catalogue number
+            catnos.pop("none", None)
+
+        # Sorting is stable, so equally common ones keep their order
+        return ", ".join(catno for catno, _count in sorted(catnos.values(), key=lambda item: -item[1]))
+
+    @property
+    def release_format(self):
+        """Formats without duplicates, e.g. "LP, Album, FLAC, WAV"."""
+
+        format_names = {}
+
+        for release in self.releases:
+            for format_name in release.release_format.split(","):
+                format_name = self.QUANTITY_PATTERN.sub("", format_name.strip())
+
+                if format_name and format_name != "File":
+                    format_names.setdefault(format_name.lower(), format_name)
+
+        if not format_names and any(release.release_format for release in self.releases):
+            return "File"
+
+        return ", ".join(format_names.values())
+
+    def is_new(self, last_seen_release_id):
+        """Check if all formats were added since the label was last viewed,
+        so that a new format of an older release doesn't count as new."""
+
+        if last_seen_release_id is None:
+            return False
+
+        return all(release.id > last_seen_release_id for release in self.releases)
+
+
 class LibraryIndex:
     """Folder names in the music library, indexed so that a Discogs release
     can be matched by catalogue number, or else by artist and title words."""
@@ -183,6 +267,7 @@ class Discogs:
     LIBRARY_CACHE_FILE_NAME = "discogs_library.json"
     LIBRARY_CACHE_VERSION = 1
     MAX_PENDING_RELEASES = 100
+    MAX_FORMAT_YEAR_DIFFERENCE = 1  # Formats years apart are reissues, and kept apart
     OLD_DEFAULT_FOLDER_NAME_PATTERN = "$year $catno $artist - $title"
     CATNO_SEPARATOR_PATTERN = re.compile(r"[\s\-\u2010-\u2015]+")  # Spaces and dashes
     # Years not joined to letters or digits, so that e.g. "EXR1995" doesn't count
@@ -563,6 +648,54 @@ class Discogs:
         """
 
         self._start_thread(self._label_releases, label_id, page, self._get_token())
+
+    def group_releases(self, releases):
+        """Group the formats of each release, newest first. Releases are
+        formats of the same release if they have the same artist and title,
+        and were released within a year of the newest one. Releases are
+        expected newest first, as Discogs returns them."""
+
+        groups = []
+        groups_by_name = {}
+        unknown_year_releases = []
+
+        for release in releases:
+            if not release.year:
+                unknown_year_releases.append(release)
+                continue
+
+            name = (tuple(LibraryIndex.get_words(release.artist)), tuple(LibraryIndex.get_words(release.title)))
+            group = None
+
+            for candidate_group in groups_by_name.get(name, ()):
+                if candidate_group.releases[0].year - release.year <= self.MAX_FORMAT_YEAR_DIFFERENCE:
+                    group = candidate_group
+                    break
+
+            if group is None:
+                group = DiscogsReleaseGroup([])
+                groups.append(group)
+                groups_by_name.setdefault(name, []).append(group)
+
+            group.releases.append(release)
+
+        for release in unknown_year_releases:
+            name = (tuple(LibraryIndex.get_words(release.artist)), tuple(LibraryIndex.get_words(release.title)))
+            candidate_groups = groups_by_name.get(name, [])
+
+            if len(candidate_groups) == 1:
+                # Only one version of the release, so this is likely another format of it
+                candidate_groups[0].releases.append(release)
+                continue
+
+            group = DiscogsReleaseGroup([release])
+            groups.append(group)
+            groups_by_name.setdefault(name, []).append(group)
+
+        # Sort by the earliest year of the formats, unknown years last. Sorting
+        # is stable, so releases from the same year keep the Discogs order.
+        groups.sort(key=lambda group: -(group.year or 0))
+        return groups
 
     def get_search_term(self, artist, title):
         """Create a Soulseek search term for a release, without the extra
