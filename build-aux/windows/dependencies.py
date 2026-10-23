@@ -26,6 +26,7 @@ def install_pacman():
                 f"{prefix}-python-build",
                 f"{prefix}-python-cx-freeze",
                 f"{prefix}-python-gobject",
+                f"{prefix}-python-mutagen",
                 f"{prefix}-python-pycodestyle",
                 f"{prefix}-python-pylint",
                 f"{prefix}-python-setuptools",

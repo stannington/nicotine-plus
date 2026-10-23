@@ -73,7 +73,8 @@ EXCLUDED_MODULES = UNAVAILABLE_MODULES + [
     "ctypes.test", "ensurepip", "idlelib", "pip", "pydoc", "pydoc_data",
     "tkinter", "turtle", "turtledemo", "unittest.test", "venv", "zoneinfo"
 ]
-INCLUDED_MODULES = [MODULE_NAME, "gi"] + list(
+# mutagen is used for tagging files downloaded from the Discogs tab
+INCLUDED_MODULES = [MODULE_NAME, "gi", "mutagen"] + list(
     # pylint: disable=no-member
     {module for module in sys.stdlib_module_names if not module.startswith("_")}.difference(EXCLUDED_MODULES)
 )
