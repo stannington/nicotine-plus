@@ -343,6 +343,10 @@ class MainWindow(Window):
             else:
                 self.widget.move(x_pos, y_pos)
 
+        elif sys.platform == "win32":
+            # GTK places windows itself when they're shown, so move afterwards
+            self.widget.connect_after("map", self.on_map_win32)
+
         # Maximize main window if necessary
         if config.sections["ui"]["maximized"] or isolated_mode:
             self.widget.maximize()
@@ -383,6 +387,16 @@ class MainWindow(Window):
         self.widget.set_help_overlay(help_overlay)
 
     # Window State #
+
+    def on_map_win32(self, *_args):
+
+        x_pos = config.sections["ui"]["xposition"]
+        y_pos = config.sections["ui"]["yposition"]
+
+        if x_pos == -1 and y_pos == -1:
+            return
+
+        self.move_win32(x_pos, y_pos)
 
     def on_window_active_changed(self, *_args):
 

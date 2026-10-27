@@ -161,9 +161,56 @@ class Window:
     def get_position(self):
 
         if GTK_API_VERSION >= 4:
+            if sys.platform == "win32":
+                return self._get_position_win32()
+
             return None
 
         return self.widget.get_position()
+
+    def _get_position_win32(self):
+
+        surface = self.get_surface()
+
+        if surface is None:
+            return None
+
+        from ctypes import byref, windll, wintypes
+
+        h_wnd = surface.get_handle()
+
+        # Minimized windows are moved far off-screen, don't remember that
+        if not h_wnd or windll.user32.IsIconic(h_wnd):
+            return None
+
+        rect = wintypes.RECT()
+
+        if not windll.user32.GetWindowRect(h_wnd, byref(rect)):
+            return None
+
+        return rect.left, rect.top
+
+    def move_win32(self, x_pos, y_pos):
+        """Move the window, unless the position is no longer on a screen
+        (e.g. after unplugging a monitor). GTK 4 has no way to do this."""
+
+        surface = self.get_surface()
+
+        if surface is None:
+            return
+
+        from ctypes import windll, wintypes
+
+        monitor_default_to_null = 0
+        swp_flags = 0x0001 | 0x0004 | 0x0010  # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+
+        # Check a point near the title bar, so the window can still be dragged
+        title_bar_point = wintypes.POINT(x_pos + 100, y_pos + 50)
+
+        if not windll.user32.MonitorFromPoint(title_bar_point, monitor_default_to_null):
+            return
+
+        windll.user32.SetWindowPos(surface.get_handle(), None, x_pos, y_pos, 0, 0, swp_flags)
 
     def is_active(self):
         return self.widget.is_active()
