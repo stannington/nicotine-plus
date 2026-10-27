@@ -98,6 +98,8 @@ EVENT_NAMES = {
     "discogs-label-releases",
     "discogs-label-search",
     "discogs-library-updated",
+    "discogs-release-search",
+    "discogs-release-tracks",
 
     # Interests
     "add-dislike",

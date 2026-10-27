@@ -20,6 +20,7 @@ CURRENT_FOLDER_PATH = os.path.dirname(os.path.realpath(__file__))
 DATA_FOLDER_PATH = os.path.join(CURRENT_FOLDER_PATH, "temp_data")
 LABEL_SEARCH_FILE_PATH = os.path.join(CURRENT_FOLDER_PATH, "label_search.json")
 LABEL_RELEASES_FILE_PATH = os.path.join(CURRENT_FOLDER_PATH, "label_releases.json")
+RELEASE_SEARCH_FILE_PATH = os.path.join(CURRENT_FOLDER_PATH, "release_search.json")
 LIBRARY_FOLDER_PATHS = (
     "Labels/! Example Recordings/1 Singles/[EXR 042] Test Artist - Night Signals EP (2024) [WEB-FLAC]",
     "Labels/! Example Recordings/1 Singles/2023 another_artist-dubplate_pressure-exr041-web",
@@ -84,6 +85,42 @@ class DiscogsTest(TestCase):
         self.assertEqual(params["type"], ["label"])
         self.assertTrue(request.get_header("User-agent").startswith("Nicotine+/"))
         self.assertIsNone(request.get_header("Authorization"))
+
+    def test_search_releases(self, mock_urlopen):
+
+        self.set_response(mock_urlopen, RELEASE_SEARCH_FILE_PATH)
+        groups = core.discogs.search_releases("night signals")
+
+        _request, path, query = self.get_request(mock_urlopen)
+        self.assertEqual(path, "/database/search")
+        self.assertEqual(query["type"], ["release"])
+        self.assertEqual(query["q"], ["night signals"])
+
+        # Formats are grouped only on the same label, in the order Discogs returns them
+        self.assertEqual(
+            [[release.id for release in group.releases] for group in groups], [[2001, 2002], [2003], [2004]])
+
+        group = groups[0]
+        self.assertEqual((group.artist, group.title, group.year, group.label), (
+            "Test Artist", "Night Signals", 2024, "Example Recordings"))
+        self.assertEqual(group.tracklist_release.id, 2002)
+
+        # Results without an artist, year or label
+        group = groups[2]
+        self.assertEqual((group.artist, group.title, group.year, group.label), ("", "Night Signals", None, ""))
+
+    def test_get_release_search_term(self, _mock_urlopen):
+
+        for folder_name, search_term in (
+            ("Calibre - Even If (2009) [FLAC]", "Calibre Even If"),
+            ("[DSCI4047] HLZ - Rust EP (2025) WEB FLAC 24bit", "DSCI4047 HLZ Rust"),
+            ("Test_Artist-Night_Signals-(EXR042)-WEB-2024-GRP", "Test Artist Night Signals EXR042"),
+            ("2020 - Artist - Album [320 kbps]", "Artist Album"),
+            (os.path.join("Artist", "CD1"), "Artist CD1"),
+            ("Don't Stop", "Don't Stop")
+        ):
+            with self.subTest(folder_name=folder_name):
+                self.assertEqual(core.discogs.get_release_search_term(folder_name), search_term)
 
     def test_get_label_releases(self, mock_urlopen):
 
@@ -514,6 +551,33 @@ class FolderRenameTest(TestCase):
         core.discogs._folder_download_finished(folder_path)
 
         self.assertTrue(os.path.isdir(os.path.join(self.download_path, "2024 EXR042 Test Artist - Night Signals")))
+
+    def test_rename_chosen_folder(self):
+
+        config.sections["discogs"]["folder_name_pattern"] = "$label/$year $catno $artist - $title"
+        core.discogs.add_pending_release(
+            "Test Artist", "Night Signals", 2024, "EXR042", "Example Recordings", 2002,
+            folder_path=os.path.join(self.download_path, "user", "tunes"), download_folder_path=self.download_path
+        )
+
+        # Folders with the title in their name are not renamed, only the chosen one
+        folder_path = self.create_folder("Night Signals", file_names=("night signals.flac",))
+        core.discogs._folder_download_finished(folder_path)
+        self.assertTrue(os.path.isdir(folder_path))
+
+        # The chosen folder is renamed even in a subfolder, and moved to the chosen download folder
+        folder_path = self.create_folder("user", "tunes", file_names=("01.flac",))
+
+        with patch("pynicotine.discogs.Discogs._start_thread") as mock_start_thread:
+            core.discogs._folder_download_finished(folder_path)
+
+        new_folder_path = os.path.join(
+            self.download_path, "Example Recordings", "2024 EXR042 Test Artist - Night Signals")
+
+        self.assertTrue(os.path.isdir(new_folder_path))
+        self.assertFalse(os.path.exists(folder_path))
+        self.assertEqual(mock_start_thread.call_args.args[1:3], (new_folder_path, 2002))
+        self.assertEqual(config.sections["discogs"]["pending_releases"], [])
 
     def test_keep_folder_name(self):
 

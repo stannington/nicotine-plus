@@ -1,0 +1,12 @@
+{
+  "pagination": {"page": 1, "pages": 1, "per_page": 50, "items": 4, "urls": {}},
+  "results": [
+    {"id": 2001, "type": "release", "title": "Test Artist - Night Signals", "year": "2024", "catno": "EXR 042",
+     "label": ["Example Recordings", "Example Distribution"], "format": ["Vinyl", "12\"", "EP"]},
+    {"id": 2002, "type": "release", "title": "Test Artist - Night Signals", "year": "2024", "catno": "EXR042D",
+     "label": ["Example Recordings"], "format": ["File", "FLAC", "EP"]},
+    {"id": 2003, "type": "release", "title": "Test Artist - Night Signals", "year": "2024", "catno": "OTH 7",
+     "label": ["Other Label"], "format": ["Vinyl", "12\""]},
+    {"id": 2004, "type": "release", "title": "Night Signals", "catno": "none", "label": [], "format": []}
+  ]
+}

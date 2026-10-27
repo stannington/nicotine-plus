@@ -31,15 +31,16 @@ class DiscogsLabel:
 
 
 class DiscogsRelease:
-    __slots__ = ("id", "artist", "title", "year", "catno", "release_format")
+    __slots__ = ("id", "artist", "title", "year", "catno", "release_format", "label")
 
-    def __init__(self, release_id, artist, title, year, catno, release_format):
+    def __init__(self, release_id, artist, title, year, catno, release_format, label=""):
         self.id = release_id
         self.artist = artist
         self.title = title
         self.year = year
         self.catno = catno
         self.release_format = release_format
+        self.label = label
 
 
 class DiscogsReleaseGroup:
@@ -65,6 +66,10 @@ class DiscogsReleaseGroup:
     @property
     def title(self):
         return self.releases[0].title
+
+    @property
+    def label(self):
+        return self.releases[0].label
 
     @property
     def year(self):
@@ -272,6 +277,7 @@ class Discogs:
 
     API_URL = "https://api.discogs.com"
     MAX_LABEL_RESULTS = 50
+    MAX_RELEASE_RESULTS = 50
     RELEASES_PER_PAGE = 100  # Maximum allowed by Discogs
     TIMEOUT = 10
     MAX_IMAGE_SIZE = 10_000_000
@@ -299,6 +305,15 @@ class Discogs:
     CATNO_SEPARATOR_PATTERN = re.compile(r"[\s\-\u2010-\u2015]+")  # Spaces and dashes
     # Years not joined to letters or digits, so that e.g. "EXR1995" doesn't count
     YEAR_PATTERN = re.compile(r"(?<![^\W_])(?:19|20)\d\d(?![^\W_])")
+    FOLDER_NAME_WORD_PATTERN = re.compile(r"[^\W_]+(?:'[^\W_]+)*")
+    # Words in Soulseek folder names that describe the files rather than the
+    # release. Discogs only finds releases that have every search word.
+    FOLDER_NAME_NOISE_WORDS = {
+        "flac", "mp3", "wav", "aiff", "alac", "ogg", "m4a", "web", "webflac", "cd", "cdm", "cds", "cdr",
+        "vinyl", "vls", "lp", "ep", "kbps", "320", "320kbps", "256", "192", "v0", "v2", "vbr", "cbr",
+        "16bit", "24bit", "16", "24", "44", "48", "96", "1khz", "khz", "hi", "res", "lossless", "retail",
+        "promo", "bit"
+    }
 
     def __init__(self):
 
@@ -448,14 +463,22 @@ class Discogs:
         self.is_checking_favourite_labels = False
         events.emit("discogs-favourite-labels-checked")
 
-    def add_pending_release(self, artist, title, year, catno, label="", release_id=0):
+    def add_pending_release(self, artist, title, year, catno, label="", release_id=0, folder_path="",
+                            download_folder_path=""):
         """Remember a release searched for from the Discogs tab, so that its
         folder can be renamed once it's downloaded. The release id is the
         Discogs release whose tracklist is used to tag and rename the
-        files."""
+        files.
+
+        A release chosen in the download dialog has the path of the folder
+        it's downloaded to, and only that folder is renamed. The renamed
+        folder is placed in the download folder chosen in the dialog."""
 
         pending_releases = config.sections["discogs"]["pending_releases"]
         release = [artist, title, year or 0, catno, label, release_id or 0]
+
+        if folder_path:
+            release += [folder_path, download_folder_path or os.path.dirname(folder_path)]
 
         if release in pending_releases:
             pending_releases.remove(release)
@@ -519,6 +542,10 @@ class Discogs:
 
         # Most recently searched first
         for release in reversed(config.sections["discogs"]["pending_releases"]):
+            if self._get_pending_folder_path(release):
+                # Only the folder chosen in the download dialog is renamed
+                continue
+
             artist, title, _year, catno, *_rest = release
             title_words = LibraryIndex.get_significant_words(title)
 
@@ -544,11 +571,29 @@ class Discogs:
         return (config.sections["transfers"]["usernamesubfolders"]
                 and os.path.dirname(parent_folder_path) == download_folder_path)
 
+    @staticmethod
+    def _get_pending_folder_path(release):
+        """Return the folder a release was chosen for in the download
+        dialog, or an empty string."""
+        return release[6] if len(release) > 6 else ""
+
+    @staticmethod
+    def _is_same_path(path, other_path):
+        return os.path.normcase(os.path.normpath(path)) == os.path.normcase(os.path.normpath(other_path))
+
     def _find_downloaded_release(self, folder_path):
         """Return the pending release a downloaded folder contains, or None."""
 
-        if not config.sections["discogs"]["pending_releases"]:
+        pending_releases = config.sections["discogs"]["pending_releases"]
+
+        if not pending_releases:
             return None
+
+        for release in reversed(pending_releases):
+            pending_folder_path = self._get_pending_folder_path(release)
+
+            if pending_folder_path and self._is_same_path(pending_folder_path, folder_path):
+                return release
 
         if not self._is_top_download_folder(folder_path):
             return None
@@ -596,7 +641,10 @@ class Discogs:
         if not folder_name:
             return None
 
-        new_folder_path = os.path.join(os.path.dirname(folder_path), folder_name)
+        # Releases chosen in the download dialog go in the download folder
+        # chosen there, even if the folder was downloaded into a subfolder
+        parent_folder_path = release[7] if len(release) > 7 else os.path.dirname(folder_path)
+        new_folder_path = os.path.join(parent_folder_path, folder_name)
 
         if new_folder_path == folder_path:
             return folder_path
@@ -827,6 +875,49 @@ class Discogs:
 
         self._start_thread(self._label_search, query, self._get_token())
 
+    def request_release_search(self, query):
+        """Search for releases matching the query. Emits
+        "discogs-release-search" with the query, a list of
+        DiscogsReleaseGroup and an error message (or None).
+        """
+
+        query = query.strip()
+
+        if not query:
+            return
+
+        self._start_thread(self._release_search, query, self._get_token())
+
+    def request_release_tracks(self, release_id):
+        """Retrieve the number of tracks of a release, to compare with the
+        files of a folder. Emits "discogs-release-tracks" with the release id,
+        number of tracks and an error message (or None).
+        """
+
+        self._start_thread(self._release_tracks, release_id, self._get_token())
+
+    def get_release_search_term(self, folder_name):
+        """Create a Discogs search term from the name of a folder on
+        Soulseek, without words such as "FLAC" or the year, which make
+        Discogs find nothing."""
+
+        folder_name = folder_name.replace("\\", " ").replace("/", " ")
+
+        if " " not in folder_name.strip() and folder_name.count("-") >= 3:
+            # Scene style, e.g. "Artist-Title-(CAT001)-WEB-2020-GROUP", ends with the group name
+            folder_name = folder_name.rpartition("-")[0]
+
+        words = []
+
+        for word in self.FOLDER_NAME_WORD_PATTERN.findall(folder_name):
+            if word.lower() in self.FOLDER_NAME_NOISE_WORDS or self.YEAR_PATTERN.fullmatch(word):
+                continue
+
+            if word.lower() not in (existing_word.lower() for existing_word in words):
+                words.append(word)
+
+        return " ".join(words)
+
     def request_label_releases(self, label_id, page=1):
         """Retrieve one page of a label's releases, newest first. Emits
         "discogs-label-releases" with the label id, page number, total number
@@ -923,6 +1014,35 @@ class Discogs:
 
         events.emit_main_thread("discogs-label-search", query, labels, error_message)
 
+    def _release_search(self, query, token):
+
+        release_groups = []
+        error_message = None
+
+        try:
+            release_groups = self.search_releases(query, token)
+
+        except Exception as error:
+            log.add_debug("Unable to search Discogs releases for %s: %s", (query, error))
+            error_message = str(error)
+
+        events.emit_main_thread("discogs-release-search", query, release_groups, error_message)
+
+    def _release_tracks(self, release_id, token):
+
+        num_tracks = 0
+        error_message = None
+
+        try:
+            release_data = self._request(f"/releases/{quote(str(release_id))}", {}, token)
+            num_tracks = len(discogsfiles.get_tracks(release_data))
+
+        except Exception as error:
+            log.add_debug("Unable to retrieve tracks of Discogs release %s: %s", (release_id, error))
+            error_message = str(error)
+
+        events.emit_main_thread("discogs-release-tracks", release_id, num_tracks, error_message)
+
     def _label_releases(self, label_id, page, token):
 
         num_pages = 0
@@ -947,6 +1067,51 @@ class Discogs:
         }, token)
 
         return [DiscogsLabel(result["id"], result["title"]) for result in data["results"]]
+
+    def search_releases(self, query, token=""):
+        """Return the releases matching the query, with the formats of each
+        release grouped, best matches first. Formats are only grouped if
+        they're on the same label, since the label decides the folder."""
+
+        data = self._request("/database/search", {
+            "q": query,
+            "type": "release",
+            "per_page": self.MAX_RELEASE_RESULTS
+        }, token)
+
+        releases_by_label = {}
+        positions = {}
+
+        for position, result in enumerate(data["results"]):
+            # Search results have the artist in the title, e.g. "Calibre - Even If"
+            artist, separator, title = result.get("title", "").partition(" - ")
+
+            if not separator:
+                artist, title = "", artist
+
+            year = str(result.get("year") or "")
+            label = next(iter(result.get("label") or []), "")
+            release = DiscogsRelease(
+                release_id=result["id"],
+                artist=artist,
+                title=title,
+                year=int(year) if year.isdigit() and int(year) else None,
+                catno=result.get("catno", ""),
+                release_format=", ".join(result.get("format") or []),
+                label=label
+            )
+            releases_by_label.setdefault(label.lower(), []).append(release)
+            positions[release.id] = position
+
+        groups = []
+
+        for releases in releases_by_label.values():
+            # Grouping expects the newest release first
+            releases.sort(key=lambda release: -(release.year or 0))
+            groups += self.group_releases(releases)
+
+        groups.sort(key=lambda group: min(positions[release.id] for release in group.releases))
+        return groups
 
     def get_label_releases(self, label_id, page=1, token=""):
 

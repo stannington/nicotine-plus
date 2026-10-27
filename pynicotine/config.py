@@ -417,7 +417,9 @@ class Config:
                 "pending_releases": [],
                 "favourite_labels": [],
                 "last_seen_releases": {},
-                "hide_owned_releases": False
+                "hide_owned_releases": False,
+                "release_dialog_width": 900,
+                "release_dialog_height": 500
             },
             "interests": {
                 "likes": [],

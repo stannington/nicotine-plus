@@ -83,6 +83,68 @@
       </object>
     </child>
     <child>
+      <object class="GtkBox">
+        <property name="spacing">6</property>
+        <property name="visible">True</property>
+        <child>
+          <object class="GtkButton" id="discogs_button">
+            <property name="tooltip-text" translatable="yes">Choose the Discogs release in the folder, to rename the folder and tag its files once downloaded</property>
+            <property name="visible">True</property>
+            <signal name="clicked" handler="on_choose_discogs_release"/>
+            <child>
+              <object class="GtkBox">
+                <property name="spacing">6</property>
+                <property name="visible">True</property>
+                <child>
+                  <object class="GtkImage">
+                    <property name="icon-name">media-optical-symbolic</property>
+                    <property name="visible">True</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel">
+                    <property name="label" translatable="yes">Disc_ogs Release…</property>
+                    <property name="mnemonic-widget">discogs_button</property>
+                    <property name="use-underline">True</property>
+                    <property name="visible">True</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkLabel" id="discogs_release_label">
+            <property name="ellipsize">end</property>
+            <property name="hexpand">True</property>
+            <property name="visible">True</property>
+            <property name="xalign">0</property>
+            <style>
+              <class name="dim-label"/>
+            </style>
+          </object>
+        </child>
+        <child>
+          <object class="GtkButton" id="discogs_clear_button">
+            <property name="tooltip-text" translatable="yes">Don't Rename or Tag</property>
+            <property name="valign">center</property>
+            <property name="visible">False</property>
+            <signal name="clicked" handler="on_clear_discogs_release"/>
+            <child>
+              <object class="GtkImage">
+                <property name="icon-name">edit-clear-symbolic</property>
+                <property name="visible">True</property>
+              </object>
+            </child>
+            <style>
+              <class name="flat"/>
+              <class name="image-button"/>
+            </style>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
       <object class="GtkFrame">
         <property name="vexpand">True</property>
         <property name="visible">True</property>

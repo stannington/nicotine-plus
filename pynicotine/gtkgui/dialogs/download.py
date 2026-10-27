@@ -11,8 +11,10 @@ from gi.repository import GObject
 from gi.repository import Gtk
 
 from pynicotine.core import core
+from pynicotine.discogsfiles import AUDIO_EXTENSIONS
 from pynicotine.events import events
 from pynicotine.gtkgui.application import GTK_API_VERSION
+from pynicotine.gtkgui.dialogs.discogsrelease import DiscogsRelease
 from pynicotine.gtkgui.dialogs.fileproperties import FileProperties
 from pynicotine.gtkgui.widgets import ui
 from pynicotine.gtkgui.widgets.accelerator import Accelerator
@@ -35,6 +37,9 @@ class Download(Dialog):
         (
             self.cancel_button,
             self.container,
+            self.discogs_button,
+            self.discogs_clear_button,
+            self.discogs_release_label,
             self.download_button,
             self.download_folder_default_button,
             self.download_folder_label,
@@ -65,6 +70,8 @@ class Download(Dialog):
 
         self.download_callback = None
         self.file_properties = None
+        self.discogs_release_dialog = None
+        self.discogs_release = None
         self.parent_iterators = {}
         self.initial_selected_iterators = set()
         self.folder_names = {}
@@ -144,6 +151,7 @@ class Download(Dialog):
         self.expand_button.connect("toggled", self.on_expand_tree)
 
         for event_name, callback in (
+            ("discogs-release-tracks", self.discogs_release_tracks),
             ("folder-contents-response", self.folder_contents_response),
             ("folder-contents-failed", self.folder_contents_failed)
         ):
@@ -152,6 +160,9 @@ class Download(Dialog):
     def destroy(self):
 
         self.clear()
+
+        if self.discogs_release_dialog is not None:
+            self.discogs_release_dialog.destroy()
 
         self.popup_menu.destroy()
         self.download_folder_button.destroy()
@@ -174,6 +185,7 @@ class Download(Dialog):
 
         self.download_callback = None
         self.total_selected_size = 0
+        self.set_discogs_release(None)
 
         self.set_finished()
 
@@ -286,6 +298,7 @@ class Download(Dialog):
                 self.tree_view.expand_row(parent_iterator)
 
         self.update_title()
+        self.update_discogs_button()
         self.unselect_all_button.set_visible(True)
         self.tree_view.unfreeze()
 
@@ -341,6 +354,15 @@ class Download(Dialog):
             files.append((username, file_path, destination_folder_path, size, file_attributes))
 
         files.sort(key=itemgetter(1))
+        destination_folder_paths = {destination_folder_path for _username, _file_path, destination_folder_path,
+                                    _size, _file_attributes in files}
+
+        if self.discogs_release is not None and len(destination_folder_paths) == 1:
+            group = self.discogs_release
+            core.discogs.add_pending_release(
+                group.artist, group.title, group.year, group.catno, group.label, group.tracklist_release.id,
+                folder_path=next(iter(destination_folder_paths)), download_folder_path=download_folder_path
+            )
 
         for username, file_path, destination_folder_path, size, file_attributes in files:
             core.downloads.enqueue_download(
@@ -353,6 +375,92 @@ class Download(Dialog):
 
         self.application.previous_download_folder = self.download_folder_button.get_path(dynamic=False)
         self.close()
+
+    def get_discogs_folder(self):
+        """Return the user and path of the only folder in the dialog, or
+        None if there are several. Releases can only be chosen for a single
+        folder."""
+
+        if len(self.parent_iterators) != 1:
+            return None
+
+        for parent_iterator, _child_iterators in self.parent_iterators.values():
+            return (self.tree_view.get_row_value(parent_iterator, "user_data"),
+                    self.tree_view.get_row_value(parent_iterator, "folder_path_data"))
+
+        return None
+
+    def update_discogs_button(self):
+
+        is_single_folder = self.get_discogs_folder() is not None
+        self.discogs_button.set_sensitive(is_single_folder)
+
+        if not is_single_folder:
+            self.set_discogs_release(None)
+
+    def set_discogs_release(self, group):
+
+        self.discogs_release = group
+        self.discogs_clear_button.set_visible(group is not None)
+
+        if group is None:
+            self.discogs_release_label.set_label("")
+            self.discogs_release_label.set_tooltip_text(None)
+            return
+
+        details = ", ".join(str(detail) for detail in (group.label, group.catno, group.year) if detail)
+        label = f"{group.artist} – {group.title}"
+
+        if details:
+            label += f" ({details})"
+
+        self.discogs_release_label.set_label(label)
+        self.discogs_release_label.set_tooltip_text(label)
+        core.discogs.request_release_tracks(group.tracklist_release.id)
+
+    def discogs_release_tracks(self, release_id, num_tracks, error_message):
+
+        group = self.discogs_release
+
+        if group is None or group.tracklist_release.id != release_id or error_message:
+            return
+
+        user_folder = self.get_discogs_folder()
+
+        if user_folder is None:
+            return
+
+        _parent_iterator, child_iterators = self.parent_iterators[user_folder[0] + user_folder[1]]
+        num_audio_files = sum(
+            1 for iterator in child_iterators
+            if os.path.splitext(self.tree_view.get_row_value(iterator, "name"))[1].lower() in AUDIO_EXTENSIONS
+        )
+        if num_audio_files == num_tracks:
+            track_count = "✓ " + ngettext("%s track", "%s tracks", num_tracks) % num_tracks
+        else:
+            track_count = "⚠ " + _("%(num_tracks)s tracks on Discogs, %(num_files)s audio files in folder") % {
+                "num_tracks": num_tracks, "num_files": num_audio_files}
+
+        self.discogs_release_label.set_label(f"{track_count}  ·  {self.discogs_release_label.get_tooltip_text()}")
+
+    def on_choose_discogs_release(self, *_args):
+
+        user_folder = self.get_discogs_folder()
+
+        if user_folder is None:
+            return
+
+        if self.discogs_release_dialog is None:
+            self.discogs_release_dialog = DiscogsRelease(self.application, choose_callback=self.set_discogs_release)
+
+        _username, folder_path = user_folder
+        folder_name = self.folder_names.get(folder_path, folder_path.rpartition("\\")[-1])
+
+        self.discogs_release_dialog.search(core.discogs.get_release_search_term(folder_name))
+        self.discogs_release_dialog.present()
+
+    def on_clear_discogs_release(self, *_args):
+        self.set_discogs_release(None)
 
     def pulse_progress(self, repeat=True):
 
